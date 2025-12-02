@@ -1,0 +1,540 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "11",
+        "title": "Fork Godot Engine Repository",
+        "description": "Fork the official Godot Engine repository (~90,000 stars) to establish the brownfield development foundation",
+        "details": "Navigate to https://github.com/godotengine/godot and fork the repository. Clone the forked repository locally. Set up upstream remote to track original repository. This establishes the brownfield development requirement for the Uncharted Territory Challenge.",
+        "testStrategy": "Verify fork exists on GitHub, clone works locally, and upstream remote is configured correctly",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:31:08.779Z"
+      },
+      {
+        "id": "12",
+        "title": "Set Up Godot Development Environment",
+        "description": "Configure local development environment for Godot 4.5 plugin development",
+        "details": "Install Godot 4.5 editor. Create new project for plugin development. Set up project structure with res:// and user:// directories. Configure editor settings for plugin development. Install any required dependencies for GDScript development.",
+        "testStrategy": "Successfully launch Godot editor, create test project, and verify all directories are accessible",
+        "priority": "high",
+        "dependencies": [
+          "11"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:31:24.856Z"
+      },
+      {
+        "id": "13",
+        "title": "Create Plugin Directory Structure",
+        "description": "Establish the complete file structure for the AI Game Builder plugin",
+        "details": "Create addons/ai_game_builder/ directory with subdirectories: ui/, api/, memory/, generators/, assets/, prompts/, resources/. Set up plugin.cfg with metadata (name, description, author, version, script). Create plugin.gd as main EditorPlugin entry point.",
+        "testStrategy": "Verify all directories exist, plugin.cfg has correct format, and plugin.gd extends EditorPlugin",
+        "priority": "high",
+        "dependencies": [
+          "12"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:31:39.563Z"
+      },
+      {
+        "id": "14",
+        "title": "Implement Base EditorPlugin Class",
+        "description": "Create the main plugin.gd file that integrates with Godot's editor",
+        "details": "Extend EditorPlugin class in plugin.gd. Implement _enter_tree() and _exit_tree() methods. Add dock/panel registration for the chat interface. Handle plugin enable/disable lifecycle. Use @tool annotation for editor execution.",
+        "testStrategy": "Plugin appears in Project Settings > Plugins, can be enabled/disabled, and shows in editor interface",
+        "priority": "high",
+        "dependencies": [
+          "13"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:31:55.368Z"
+      },
+      {
+        "id": "15",
+        "title": "Design Chat Panel UI Layout",
+        "description": "Create the visual layout for the chat interface in Godot's bottom panel",
+        "details": "Create chat_panel.tscn with VBoxContainer layout. Add ScrollContainer for message history, LineEdit for user input, Button for send. Style to match Godot editor theme. Include loading indicator and settings button. Use Control nodes with proper anchoring.",
+        "testStrategy": "Panel displays correctly in bottom dock, all UI elements are visible and properly sized",
+        "priority": "medium",
+        "dependencies": [
+          "14"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:32:11.466Z"
+      },
+      {
+        "id": "16",
+        "title": "Implement Chat Panel Logic",
+        "description": "Add GDScript functionality to the chat interface",
+        "details": "Create chat_panel.gd extending Control. Handle user input events, message display, scroll management. Implement send button and Enter key handling. Add message formatting with user/AI distinction. Connect to AI client for processing.",
+        "testStrategy": "User can type messages, press send/enter, messages display in history, and scroll works properly",
+        "priority": "medium",
+        "dependencies": [
+          "15"
+        ],
+        "status": "done",
+        "subtasks": [],
+        "updatedAt": "2025-12-02T21:32:27.590Z"
+      },
+      {
+        "id": "17",
+        "title": "Create Message Bubble Component",
+        "description": "Design reusable message display component for chat history",
+        "details": "Create message_bubble.tscn with Label for text, background styling. Support user vs AI message types with different colors/alignment. Handle text wrapping and dynamic sizing. Add timestamp display.",
+        "testStrategy": "Messages display with correct styling, wrap properly, and distinguish between user/AI messages",
+        "priority": "low",
+        "dependencies": [
+          "16"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "18",
+        "title": "Implement Settings Dialog",
+        "description": "Create configuration interface for AI provider and model selection",
+        "details": "Create settings_dialog.tscn with AcceptDialog. Add OptionButton for provider (Anthropic/OpenAI), OptionButton for model selection, LineEdit for API key with secret mode. Include test connection button and save functionality.",
+        "testStrategy": "Dialog opens from chat panel, all controls work, settings persist in EditorSettings",
+        "priority": "medium",
+        "dependencies": [
+          "16"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "19",
+        "title": "Implement Settings Dialog Logic",
+        "description": "Add GDScript functionality for settings management",
+        "details": "Create settings_dialog.gd extending AcceptDialog. Handle provider/model selection changes, API key storage in EditorSettings (secure), test connection functionality. Validate inputs and show status messages.",
+        "testStrategy": "Settings save/load correctly, API key is masked, test connection works, and validation prevents invalid configurations",
+        "priority": "medium",
+        "dependencies": [
+          "18"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "20",
+        "title": "Create Base AI Client Interface",
+        "description": "Design abstract base class for AI provider integration",
+        "details": "Create ai_client.gd as base class with virtual methods: send_request(), parse_response(), test_connection(). Define common request/response structures. Handle HTTP client setup and error handling patterns.",
+        "testStrategy": "Base class compiles without errors and provides clear interface for concrete implementations",
+        "priority": "medium",
+        "dependencies": [
+          "19"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "21",
+        "title": "Implement Claude API Provider",
+        "description": "Create Anthropic Claude API integration",
+        "details": "Create claude_provider.gd extending ai_client.gd. Implement Anthropic API v1/messages endpoint. Handle Claude Opus 4.5 and Claude Sonnet 4.5 models. Set proper headers (x-api-key, content-type). Parse Claude response format with message content.",
+        "testStrategy": "Successfully send test request to Claude API, receive valid response, and handle authentication errors",
+        "priority": "high",
+        "dependencies": [
+          "20"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "22",
+        "title": "Implement OpenAI API Provider",
+        "description": "Create OpenAI GPT API integration",
+        "details": "Create openai_provider.gd extending ai_client.gd. Implement OpenAI v1/chat/completions endpoint. Handle GPT-5 and GPT-4o models. Set Authorization Bearer header. Parse OpenAI response format with choices array.",
+        "testStrategy": "Successfully send test request to OpenAI API, receive valid response, and handle authentication errors",
+        "priority": "high",
+        "dependencies": [
+          "20"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "23",
+        "title": "Create Response Parser",
+        "description": "Implement AI response parsing and action extraction",
+        "details": "Create response_parser.gd to extract actions from AI responses. Parse code blocks, file operations, and instructions. Handle both Claude and OpenAI response formats. Extract GDScript code, scene configurations, and file paths.",
+        "testStrategy": "Parser correctly extracts code blocks, identifies file operations, and handles malformed responses gracefully",
+        "priority": "medium",
+        "dependencies": [
+          "21",
+          "22"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "24",
+        "title": "Design Memory Bank Schema",
+        "description": "Define JSON structure for project context storage",
+        "details": "Create memory bank JSON schema with project metadata, elements tracking, scenes, systems, and recent context. Define element properties structure with type, paths, properties, capabilities. Plan for extensibility and validation.",
+        "testStrategy": "Schema validates with JSON schema validator and supports all required use cases from PRD",
+        "priority": "medium",
+        "dependencies": [
+          "23"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "25",
+        "title": "Implement Memory Bank Manager",
+        "description": "Create core memory management system",
+        "details": "Create memory_bank.gd with load/save functionality to user://ai_game_builder/memory_bank.json. Implement add_element(), update_element(), get_context() methods. Handle file I/O with error checking and backup creation.",
+        "testStrategy": "Memory persists between editor sessions, elements can be added/updated, and context generation works correctly",
+        "priority": "high",
+        "dependencies": [
+          "24"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "26",
+        "title": "Implement Element Tracker",
+        "description": "Create system to track individual game elements and their properties",
+        "details": "Create element_tracker.gd to manage individual game elements (player, enemies, coins, etc.). Track properties, relationships, file paths, and capabilities. Provide search and update functionality.",
+        "testStrategy": "Elements are tracked correctly, properties update properly, and relationships between elements are maintained",
+        "priority": "medium",
+        "dependencies": [
+          "25"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "27",
+        "title": "Implement Context Builder",
+        "description": "Create system to build AI prompts with project context",
+        "details": "Create context_builder.gd to generate context-aware prompts. Include relevant elements, recent actions, and project state. Format context for both Claude and OpenAI APIs. Optimize context length for token limits.",
+        "testStrategy": "Generated prompts include relevant context, stay within token limits, and improve AI response quality",
+        "priority": "medium",
+        "dependencies": [
+          "26"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "28",
+        "title": "Create Godot Knowledge Base",
+        "description": "Compile comprehensive Godot 4.5 knowledge for AI prompts",
+        "details": "Create godot_knowledge.md with node types, physics systems, animation setup, best practices, and common patterns. Include GDScript syntax, signal usage, and optimization techniques. Format for AI consumption.",
+        "testStrategy": "Knowledge base covers all major Godot concepts mentioned in PRD and provides clear guidance for AI",
+        "priority": "medium",
+        "dependencies": [
+          "27"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "29",
+        "title": "Create System Prompt Template",
+        "description": "Design the base AI instruction prompt for game development",
+        "details": "Create system_prompt.md with AI role definition, Godot expertise, file creation instructions, and response format. Include examples of proper GDScript code and scene structure. Define output format for code generation.",
+        "testStrategy": "System prompt produces consistent, high-quality AI responses that follow Godot best practices",
+        "priority": "medium",
+        "dependencies": [
+          "28"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "30",
+        "title": "Implement Script Generator",
+        "description": "Create GDScript file generation system",
+        "details": "Create script_generator.gd to generate .gd files from AI responses. Parse code blocks, validate GDScript syntax, write to res://scripts/ directory. Handle file naming, overwrite confirmation, and error recovery.",
+        "testStrategy": "Generated scripts are syntactically valid, save to correct location, and can be loaded by Godot",
+        "priority": "high",
+        "dependencies": [
+          "29"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "31",
+        "title": "Implement Code Validator",
+        "description": "Create GDScript syntax validation system",
+        "details": "Create code_validator.gd to check GDScript syntax before saving. Use Godot's built-in parser or regex patterns. Validate common patterns, proper typing, and signal usage. Provide helpful error messages.",
+        "testStrategy": "Validator catches syntax errors, provides clear feedback, and prevents invalid code from being saved",
+        "priority": "medium",
+        "dependencies": [
+          "30"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "32",
+        "title": "Implement Node Builder",
+        "description": "Create system to build Godot node hierarchies programmatically",
+        "details": "Create node_builder.gd to construct node trees from AI specifications. Handle node creation, property setting, parent-child relationships, and script attachment. Support all common node types (CharacterBody2D, Area2D, etc.).",
+        "testStrategy": "Node hierarchies are created correctly, properties are set properly, and scripts attach successfully",
+        "priority": "high",
+        "dependencies": [
+          "31"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "33",
+        "title": "Implement Scene Generator",
+        "description": "Create .tscn file generation system",
+        "details": "Create scene_generator.gd to generate .tscn files from node hierarchies. Use PackedScene.pack() and ResourceSaver.save(). Handle scene naming, directory creation, and file overwrite confirmation.",
+        "testStrategy": "Generated scenes load correctly in Godot editor, maintain node hierarchy, and have proper script attachments",
+        "priority": "high",
+        "dependencies": [
+          "32"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "34",
+        "title": "Implement Asset Analyzer",
+        "description": "Create sprite sheet detection and analysis system",
+        "details": "Create asset_analyzer.gd to detect image dimensions, calculate possible frame sizes (16x16, 32x32, 64x64), and suggest sprite sheet configurations. Handle common sprite sheet layouts and provide user confirmation.",
+        "testStrategy": "Correctly detects image dimensions, suggests reasonable frame sizes, and handles various sprite sheet formats",
+        "priority": "medium",
+        "dependencies": [
+          "33"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "35",
+        "title": "Implement Animation Setup",
+        "description": "Create system to configure sprite animations from sheets",
+        "details": "Create animation_setup.gd to configure AnimatedSprite2D and SpriteFrames resources. Set hframes/vframes, create animation tracks, configure frame rates and looping. Handle user-defined animation names and frame ranges.",
+        "testStrategy": "Animations play correctly, frame ranges are accurate, and animation properties (speed, looping) work as expected",
+        "priority": "medium",
+        "dependencies": [
+          "34"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "36",
+        "title": "Integrate Chat with AI Pipeline",
+        "description": "Connect chat interface to complete AI processing pipeline",
+        "details": "Connect chat_panel.gd to context_builder, AI providers, response_parser, and generators. Handle async operations with proper loading states. Implement error handling and user feedback throughout the pipeline.",
+        "testStrategy": "User can send message, see loading indicator, receive AI response, and observe generated files in project",
+        "priority": "high",
+        "dependencies": [
+          "35"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "37",
+        "title": "Implement Basic Player Generation",
+        "description": "Create first working game element generation for player character",
+        "details": "Test complete pipeline with 'create a player that moves and jumps' request. Generate CharacterBody2D scene with movement script, collision shape, and placeholder sprite. Ensure proper physics setup and input handling.",
+        "testStrategy": "Generated player scene loads, character moves with arrow keys, jumps with space, and physics work correctly",
+        "priority": "high",
+        "dependencies": [
+          "36"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "38",
+        "title": "Implement Property Modification",
+        "description": "Enable AI to modify existing element properties through chat",
+        "details": "Add functionality to parse modification requests ('make jump higher'), locate elements in memory bank, identify target properties, and update script files. Handle script parsing and property value replacement.",
+        "testStrategy": "User can request 'make jump higher', AI finds player element, updates jump_velocity property, and change is reflected in game",
+        "priority": "high",
+        "dependencies": [
+          "37"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "39",
+        "title": "Implement Asset Integration Workflow",
+        "description": "Enable AI to use user-provided sprite sheets for characters",
+        "details": "Handle user requests like 'use hero.png for my player'. Analyze sprite sheet, confirm frame size with user, configure animations, and update existing player scene with proper sprite setup.",
+        "testStrategy": "User can provide sprite sheet, AI detects dimensions, confirms with user, and player displays with correct animations",
+        "priority": "medium",
+        "dependencies": [
+          "38"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "40",
+        "title": "Add Error Handling and Recovery",
+        "description": "Implement comprehensive error handling throughout the system",
+        "details": "Add try-catch blocks for API calls, file operations, and code generation. Provide user-friendly error messages, implement retry mechanisms, and handle edge cases gracefully. Log errors for debugging.",
+        "testStrategy": "System handles API failures, invalid responses, file permission errors, and provides helpful feedback to user",
+        "priority": "medium",
+        "dependencies": [
+          "39"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "41",
+        "title": "Implement Loading States and UI Feedback",
+        "description": "Add visual feedback for AI processing and file operations",
+        "details": "Add loading indicators, progress bars, and status messages to chat interface. Show when AI is thinking, files are being generated, and operations complete. Disable input during processing.",
+        "testStrategy": "User sees clear feedback during all operations, understands when system is processing, and knows when operations complete",
+        "priority": "low",
+        "dependencies": [
+          "40"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "42",
+        "title": "Create Collectible System Generation",
+        "description": "Implement AI generation of collectible items like coins",
+        "details": "Enable AI to generate Area2D-based collectibles with collision detection, collection effects, and score integration. Handle requests like 'add coins for the player to collect' with proper interaction setup.",
+        "testStrategy": "Generated coins can be collected by player, trigger collection effects, and integrate with score system",
+        "priority": "medium",
+        "dependencies": [
+          "41"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "43",
+        "title": "Implement Platform Generation",
+        "description": "Create AI generation of platforms and level geometry",
+        "details": "Enable AI to generate StaticBody2D platforms with proper collision shapes. Handle requests for level creation with multiple platforms, proper spacing, and player spawn points.",
+        "testStrategy": "Generated platforms have correct collision, player can jump on them, and level layout is playable",
+        "priority": "medium",
+        "dependencies": [
+          "42"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "44",
+        "title": "Implement Score System Generation",
+        "description": "Create AI generation of game management systems",
+        "details": "Enable AI to generate game manager scripts with score tracking, UI display, and integration with collectibles. Handle autoload setup and singleton pattern for global game state.",
+        "testStrategy": "Score system tracks points correctly, displays on screen, and integrates with collectible items",
+        "priority": "medium",
+        "dependencies": [
+          "43"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "45",
+        "title": "Add Multi-Element Scene Generation",
+        "description": "Enable AI to create complete levels with multiple elements",
+        "details": "Allow AI to generate complete level scenes containing player, platforms, collectibles, and other elements. Handle proper node organization, scene structure, and element positioning.",
+        "testStrategy": "Generated levels contain all requested elements, are properly organized, and provide complete gameplay experience",
+        "priority": "medium",
+        "dependencies": [
+          "44"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "46",
+        "title": "Implement Context-Aware Suggestions",
+        "description": "Add AI suggestions for next steps based on current project state",
+        "details": "Generate contextual suggestions after each AI action based on memory bank state. Suggest logical next steps like 'add enemies', 'create game over screen', or 'add sound effects'.",
+        "testStrategy": "Suggestions are relevant to current project state, help guide user progression, and lead to coherent game development",
+        "priority": "low",
+        "dependencies": [
+          "45"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "47",
+        "title": "Add Plugin Icon and Branding",
+        "description": "Create visual identity for the plugin in Godot editor",
+        "details": "Design plugin icon (SVG format), add to resources/icons/. Update plugin.cfg with icon path. Ensure icon follows Godot editor design guidelines and is visible in plugin list.",
+        "testStrategy": "Plugin icon displays correctly in Project Settings > Plugins and matches Godot editor aesthetic",
+        "priority": "low",
+        "dependencies": [
+          "46"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "48",
+        "title": "Implement Conversation History",
+        "description": "Add persistent storage and display of chat history",
+        "details": "Store conversation history in user://ai_game_builder/conversation_history.json. Load previous conversations on plugin startup. Add clear history option and conversation search functionality.",
+        "testStrategy": "Chat history persists between sessions, loads correctly on startup, and can be cleared by user",
+        "priority": "low",
+        "dependencies": [
+          "47"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "49",
+        "title": "Add Comprehensive Testing Suite",
+        "description": "Create automated tests for core plugin functionality",
+        "details": "Create test scenes and scripts to validate AI generation, memory bank operations, file creation, and API integration. Test edge cases, error conditions, and user workflows.",
+        "testStrategy": "All core functionality passes automated tests, edge cases are handled properly, and system is stable",
+        "priority": "medium",
+        "dependencies": [
+          "48"
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": "50",
+        "title": "Create Documentation and Demo",
+        "description": "Prepare comprehensive documentation and demonstration materials",
+        "details": "Write README.md with setup instructions, usage guide, and architecture overview. Create demo video showing complete workflow from setup to playable game. Document all features and limitations.",
+        "testStrategy": "Documentation is clear and complete, demo video demonstrates all key features, and new users can successfully set up and use the plugin",
+        "priority": "high",
+        "dependencies": [
+          "49"
+        ],
+        "status": "pending",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2025-12-02T21:32:27.594Z",
+      "taskCount": 40,
+      "completedCount": 6,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}

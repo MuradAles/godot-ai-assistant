@@ -1,0 +1,26 @@
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Godot generated
+.godot/
+.import/
+*.translation
+*.tmp
+*.bak
+
+# Dependencies
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Taskmaster reports/cache (optional - remove if you want Claude to see these)
+.taskmaster/reports/
