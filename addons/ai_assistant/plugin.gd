@@ -11,25 +11,34 @@ var editor_interface: EditorInterface
 var hidden_docks = []  # Store references to hidden docks
 
 func _enter_tree() -> void:
+	print("[AI Plugin] _enter_tree called")
 	editor_interface = get_editor_interface()
-	
+
 	# Create the AI Assistant dock
 	var dock_scene = load("res://addons/ai_assistant/ui/ai_assistant_dock.tscn")
+	print("[AI Plugin] dock_scene loaded: ", dock_scene != null)
+
 	if dock_scene:
 		ai_assistant_dock = dock_scene.instantiate()
-		# Pass plugin reference to dock so it can toggle docks
-		if ai_assistant_dock.has_method("set_plugin_reference"):
-			ai_assistant_dock.set_plugin_reference(self)
+		print("[AI Plugin] dock instantiated: ", ai_assistant_dock != null)
+
+		# Add to dock first so the node is in the tree
 		add_control_to_dock(DOCK_SLOT_RIGHT_UR, ai_assistant_dock)
+		print("[AI Plugin] dock added to editor")
+
+		# Set plugin reference
+		ai_assistant_dock.set("_plugin_reference", self)
+		print("[AI Plugin] plugin reference set")
 	else:
 		# Fallback: create a simple label if scene doesn't exist
+		print("[AI Plugin] ERROR: Could not load dock scene!")
 		ai_assistant_dock = Label.new()
 		ai_assistant_dock.text = "AI Assistant\n(UI loading...)"
 		add_control_to_dock(DOCK_SLOT_RIGHT_UR, ai_assistant_dock)
-	
+
 	# Add menu items
 	add_tool_menu_item("AI Assistant Settings", _open_settings)
-	
+
 	print("AI Assistant plugin loaded!")
 
 func _exit_tree() -> void:
@@ -50,8 +59,11 @@ func _disable_plugin() -> void:
 	pass
 
 func _open_settings() -> void:
-	# Open plugin settings dialog
-	print("Opening AI Assistant settings...")
+	# Open plugin settings dialog through the dock
+	if ai_assistant_dock and ai_assistant_dock.has_method("_on_settings_pressed"):
+		ai_assistant_dock._on_settings_pressed()
+	else:
+		print("Opening AI Assistant settings...")
 
 func toggle_docks_visibility() -> void:
 	docks_hidden = !docks_hidden

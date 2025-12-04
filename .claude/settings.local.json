@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(findstr:*)",
+      "Bash(for dir in plains forest desert snow ocean)",
+      "Bash(do touch \"c:/Users/murad/Projects/vibe/Gauntlet/godot-ai-assistant/addons/ai_assistant/assets/$dir/.gitkeep\")",
+      "Bash(done)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

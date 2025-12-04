@@ -46,7 +46,11 @@ obj/
 *.user.*
 *.autosave
 
-# Plugin-specific (if you want to ignore plugin cache)
-# Uncomment if needed:
-# addons/ai_assistant/.cache/
+# Plugin-specific
+# AI Assistant memory bank (contains conversation history)
+.ai_assistant/
 
+/scenes
+/scripts
+
+nul
