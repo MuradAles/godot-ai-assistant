@@ -136,22 +136,45 @@ Write your friendly response first, then on a new line add:
 ```
 
 PARAMS BY ACTION:
-- create_world: {"name": "World Name", "theme": "forest/desert/snow/ocean/plains", "size": "small/medium/large", "terrains": ["water", "sand", "grass", "forest", "snow"], "objects": ["tree", "rock", "house"], "features": ["crafting", "combat", "inventory"]}
-- update_world: {"terrains": [], "objects": [], "features": [], "size": "", "name": ""} (only include what's being added/changed)
+- create_world: {
+    "name": "World Name",
+    "theme": "any theme the user wants",
+    "size": "small/medium/large",
+    "terrains": [
+      {"name": "lava", "prompt": "flowing molten lava surface, glowing orange and red"},
+      {"name": "rock", "prompt": "dark volcanic rock terrain, cracked and rough"},
+      {"name": "ash", "prompt": "gray volcanic ash covered ground"}
+    ],
+    "objects": [
+      {"name": "volcano", "prompt": "small volcanic vent with smoke", "count": 3},
+      {"name": "crystal", "prompt": "glowing red fire crystal", "count": 10}
+    ],
+    "features": ["combat", "crafting"]
+  }
+- update_world: same format as create_world, only include what's being added/changed
 - finalize_world: {} (no params needed)
-- add_object: {"objects": ["tree"], "count": 5, "location": "forest"}
-- add_character: {"type": "player/npc/enemy", "behavior": "stationary/wander/patrol"}
+- add_object: {"objects": [{"name": "tree", "prompt": "tall pine tree", "count": 5}], "location": "forest"}
+- add_character: {"type": "player/npc/enemy", "name": "Hero", "behavior": "wander", "prompt": "armored knight character"}
 - generate_mechanic: {"description": "player can cut trees"}
 - run_game: {}
 - chat: {}
+
+TERRAIN AND OBJECT RULES:
+1. ALWAYS provide terrains as objects with "name" and "prompt" - describe what the terrain looks like for AI image generation
+2. Terrain array ORDER is ELEVATION ORDER: first terrain = lowest (e.g., water), last = highest (e.g., mountains)
+3. Only create transitions between ADJACENT terrains (water-sand, sand-grass, NOT water-grass)
+4. Objects also need "name", "prompt", and optional "count"
+5. Prompts should describe top-down 2D game sprites/tiles
+6. Be creative! Any theme works: space, underwater, hell, candy land, mars, medieval, cyberpunk, etc.
 
 RULES:
 1. Be conversational but ACTION-ORIENTED - prefer doing things over asking questions
 2. When user describes a world, extract ALL details and START BUILDING immediately
 3. IMPORTANT: If a world is already being built (see CURRENT WORLD BEING BUILT below), and user says anything like "create", "build", "make", "ok", "yes", "do it", "go ahead", "sounds good" - use finalize_world IMMEDIATELY
 4. Don't ask unnecessary questions - infer sensible defaults and proceed
-5. Infer things naturally - "cozy forest" means forest theme with trees
+5. Infer things naturally - "cozy forest" means forest theme with trees and appropriate terrains
 6. Always include the JSON block at the end
+7. YOU decide what terrains and objects make sense for the world - don't use hardcoded defaults!
 
 """ + context + pending_context
 

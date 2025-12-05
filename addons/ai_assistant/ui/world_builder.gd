@@ -13,13 +13,13 @@ var _game_state: RefCounted
 var _script_validator: RefCounted
 var _current_world_path := ""
 
-# AI-Driven Conversation State
+# AI-Driven Conversation State - AI provides all values
 var _pending_world := {
 	"name": "",
-	"theme": "plains",
-	"terrains": [],
+	"theme": "",  # AI provides theme (e.g., "mars", "underwater", "medieval")
+	"terrains": [],  # [{name, prompt}] in elevation order
 	"size": "medium",
-	"objects": [],
+	"objects": [],  # [{name, prompt, count}]
 	"features": []
 }
 
@@ -65,19 +65,22 @@ func execute_decision(decision: Dictionary) -> void:
 
 
 ## AI decided to start creating a world
+## AI provides: {name, theme, terrains, size, objects, features}
 func _execute_create_world(params: Dictionary) -> void:
 	_pending_world = {
-		"name": params.get("name", "New World"),
-		"theme": params.get("theme", "plains"),
+		"name": params.get("name", ""),
+		"theme": params.get("theme", ""),
 		"terrains": params.get("terrains", []),
 		"size": params.get("size", "medium"),
 		"objects": params.get("objects", []),
 		"features": params.get("features", [])
 	}
-	status_message.emit("World configuration started: " + _pending_world.name, Color.CYAN)
+	var world_name: String = _pending_world.name if not _pending_world.name.is_empty() else "New World"
+	status_message.emit("World configuration started: " + world_name, Color.CYAN)
 
 
 ## AI decided to update the world being built
+## Terrains can be strings OR dictionaries with {name, prompt}
 func _execute_update_world(params: Dictionary) -> void:
 	var new_name: String = params.get("name", "")
 	if not new_name.is_empty():
@@ -91,11 +94,36 @@ func _execute_update_world(params: Dictionary) -> void:
 	if not new_size.is_empty():
 		_pending_world.size = new_size
 
+	# Terrains can be strings OR {name: "terrain", prompt: "description"}
 	var new_terrains: Array = params.get("terrains", [])
 	for t in new_terrains:
-		if t not in _pending_world.terrains:
-			_pending_world.terrains.append(t)
-			status_message.emit("Added terrain: " + str(t), Color.CYAN)
+		var terrain_name: String = ""
+		var terrain_prompt: String = ""
+
+		if t is String:
+			terrain_name = t
+		elif t is Dictionary:
+			terrain_name = t.get("name", "")
+			terrain_prompt = t.get("prompt", "")
+
+		if terrain_name.is_empty():
+			continue
+
+		# Check if terrain already exists
+		var found := false
+		for existing in _pending_world.terrains:
+			var existing_name: String = existing if existing is String else existing.get("name", "")
+			if existing_name == terrain_name:
+				found = true
+				break
+
+		if not found:
+			# Store as dict if prompt provided, otherwise just name
+			if terrain_prompt.is_empty():
+				_pending_world.terrains.append(terrain_name)
+			else:
+				_pending_world.terrains.append({"name": terrain_name, "prompt": terrain_prompt})
+			status_message.emit("Added terrain: " + terrain_name, Color.CYAN)
 
 	var new_objects: Array = params.get("objects", [])
 	for obj in new_objects:
@@ -111,11 +139,17 @@ func _execute_update_world(params: Dictionary) -> void:
 
 
 ## AI decided to finalize and create the world
+## NO hardcoded assumptions - AI provides everything:
+## - terrains: [{name, prompt}] in elevation order (first = lowest, last = highest)
+## - objects: [{name, prompt, count}] with AI-generated prompts
+## - transitions: auto-generated between adjacent terrains only
 func _execute_finalize_world() -> void:
 	status_message.emit("Creating world...", Color.CYAN)
 
+	# AI must provide terrains - no fallback
 	if _pending_world.terrains.is_empty():
-		_pending_world.terrains = ["water", "sand", "grass"]
+		status_message.emit("No terrains specified! AI must provide terrain data.", Color.RED)
+		return
 
 	var size: int = 128
 	match _pending_world.size:
@@ -126,39 +160,65 @@ func _execute_finalize_world() -> void:
 	if _asset_manager:
 		_asset_manager.clear()
 
-	# Sort terrains by elevation (lowest to highest) for proper terrain generation
-	var terrains_array: Array = _pending_world.get("terrains", [])
-	terrains_array = _sort_terrains_by_elevation(terrains_array)
-	_pending_world.terrains = terrains_array
+	# Extract terrain data - AI provides order (array order = elevation order)
+	# AI MUST provide prompts - no hardcoded fallbacks
+	var terrain_names: Array[String] = []
+	var terrain_prompts: Dictionary = {}  # name -> prompt
 
-	# Add terrains to manifest
+	for t in _pending_world.get("terrains", []):
+		var terrain_name: String = ""
+		var terrain_prompt: String = ""
+
+		if t is String:
+			terrain_name = t
+			# AI didn't provide prompt - use generic description
+			terrain_prompt = terrain_name + " terrain, top-down view"
+		elif t is Dictionary:
+			terrain_name = t.get("name", "")
+			terrain_prompt = t.get("prompt", terrain_name + " terrain, top-down view")
+
+		if not terrain_name.is_empty():
+			terrain_names.append(terrain_name)
+			terrain_prompts[terrain_name] = terrain_prompt
+
+	# Add terrains to manifest (order preserved from AI)
 	if _asset_manager:
-		# Also set the terrain_order in manifest
-		_asset_manager.set_terrain_order(terrains_array)
-		for t in terrains_array:
-			var terrain_prompt: String = _get_terrain_prompt(t)
-			_asset_manager.add_terrain(t, terrain_prompt)
+		_asset_manager.set_terrain_order(terrain_names)
 
-		# Add transitions - ONLY between adjacent terrains in elevation order
-		# No wrap-around: water-grass-forest-snow means only 3 transitions needed
-		var terrain_count: int = terrains_array.size()
-		for i in range(terrain_count - 1):  # Stop before last terrain
-			var from_t: String = terrains_array[i]
-			var to_t: String = terrains_array[i + 1]
-			var trans_prompt: String = from_t + " to " + to_t + " transition"
+		for terrain_name in terrain_names:
+			var terrain_prompt: String = terrain_prompts.get(terrain_name, "")
+			_asset_manager.add_terrain(terrain_name, terrain_prompt)
+			status_message.emit("Terrain: " + terrain_name, Color.CYAN)
+
+		# Add transitions between adjacent terrains only
+		var terrain_count: int = terrain_names.size()
+		for i in range(terrain_count - 1):
+			var from_t: String = terrain_names[i]
+			var to_t: String = terrain_names[i + 1]
+			var trans_prompt: String = from_t + " to " + to_t + " transition, top-down view"
 			_asset_manager.add_transition(from_t, to_t, trans_prompt)
 
-		# Add objects
+		# Add objects - AI provides name and optionally prompt/count
 		var objects_array: Array = _pending_world.get("objects", [])
 		for obj in objects_array:
-			_asset_manager.add_object(obj, obj + " game sprite", 5)
+			var obj_name: String = ""
+			var obj_prompt: String = ""
+			var obj_count: int = 5
+
+			if obj is String:
+				obj_name = obj
+				obj_prompt = obj + ", top-down view, game sprite"
+			elif obj is Dictionary:
+				obj_name = obj.get("name", "")
+				obj_prompt = obj.get("prompt", obj_name + ", top-down view, game sprite")
+				obj_count = obj.get("count", 5)
+
+			if not obj_name.is_empty():
+				_asset_manager.add_object(obj_name, obj_prompt, obj_count)
 
 	var world_name: String = _pending_world.get("name", "Untitled")
 	var world_theme: String = _pending_world.get("theme", "plains")
-	var raw_terrains: Array = _pending_world.get("terrains", [])
-	var world_terrains: Array[String] = []
-	for t in raw_terrains:
-		world_terrains.append(str(t))
+	var world_terrains: Array[String] = terrain_names
 	var world_objects: Array = _pending_world.get("objects", [])
 
 	_create_world_folder(world_name, world_theme, world_terrains)
@@ -175,7 +235,16 @@ func _execute_finalize_world() -> void:
 		_game_state.set_project_name(world_name)
 
 		for obj in world_objects:
-			_game_state.add_object(obj, 5, "scattered")
+			# Objects can be strings or {name, prompt, count} dictionaries
+			var obj_name: String = ""
+			var obj_count: int = 5
+			if obj is String:
+				obj_name = obj
+			elif obj is Dictionary:
+				obj_name = obj.get("name", "")
+				obj_count = obj.get("count", 5)
+			if not obj_name.is_empty():
+				_game_state.add_object(obj_name, obj_count, "scattered")
 
 	var pending_count: int = 0
 	if _asset_manager:
@@ -187,7 +256,7 @@ func _execute_finalize_world() -> void:
 	# Reset pending world
 	_pending_world = {
 		"name": "",
-		"theme": "plains",
+		"theme": "",
 		"terrains": [],
 		"size": "medium",
 		"objects": [],
@@ -198,35 +267,54 @@ func _execute_finalize_world() -> void:
 
 
 ## AI decided to add objects to existing world
+## Objects can be strings OR {name, prompt, count} dictionaries
 func _execute_add_object(params: Dictionary) -> void:
 	if not _game_state or not _game_state.has_world():
 		status_message.emit("Create a world first!", Color.YELLOW)
 		return
 
 	var objects: Array = params.get("objects", [])
-	var count: int = params.get("count", 5)
+	var default_count: int = params.get("count", 5)
 	var location: String = params.get("location", "")
 
 	for obj in objects:
-		var obj_str: String = obj
+		var obj_name: String = ""
+		var obj_prompt: String = ""
+		var obj_count: int = default_count
+
+		if obj is String:
+			obj_name = obj
+			obj_prompt = obj + ", top-down view, game sprite"
+		elif obj is Dictionary:
+			obj_name = obj.get("name", "")
+			obj_prompt = obj.get("prompt", obj_name + ", top-down view, game sprite")
+			obj_count = obj.get("count", default_count)
+
+		if obj_name.is_empty():
+			continue
+
 		if _game_state:
-			_game_state.add_object(obj_str, count, location)
+			_game_state.add_object(obj_name, obj_count, location)
 		if _asset_manager:
-			var prompt: String = obj_str + " game object sprite"
-			_asset_manager.add_object(obj_str, prompt, count)
-		status_message.emit("Added " + str(count) + " " + obj_str, Color.CYAN)
+			_asset_manager.add_object(obj_name, obj_prompt, obj_count)
+		status_message.emit("Added " + str(obj_count) + " " + obj_name, Color.CYAN)
 
 	action_executed.emit("add_object", params)
 
 
 ## AI decided to add a character
+## AI provides: {type, name, behavior, prompt, abilities, spawn}
 func _execute_add_character(params: Dictionary) -> void:
 	if not _game_state or not _game_state.has_world():
 		status_message.emit("Create a world first!", Color.YELLOW)
 		return
 
 	var char_type: String = params.get("type", "npc")
+	var char_name: String = params.get("name", char_type.capitalize())
 	var behavior: String = params.get("behavior", "stationary")
+	var char_prompt: String = params.get("prompt", char_name + " character, top-down view, game sprite")
+	var abilities: Array = params.get("abilities", ["move"])
+	var spawn: String = params.get("spawn", "center")
 
 	if char_type == "player":
 		if _game_state and _game_state.has_player():
@@ -234,23 +322,22 @@ func _execute_add_character(params: Dictionary) -> void:
 			return
 		if _game_state:
 			_game_state.set_player({
-				"name": "Player",
-				"spawn": "center",
-				"abilities": ["move"]
+				"name": char_name,
+				"spawn": spawn,
+				"abilities": abilities
 			})
-		status_message.emit("Player created with WASD movement", Color.GREEN)
+		status_message.emit("Player created: " + char_name, Color.GREEN)
 	else:
-		var npc_name: String = char_type.capitalize()
 		if _game_state:
 			_game_state.add_npc({
-				"name": npc_name,
+				"name": char_name,
 				"behavior": behavior,
 				"position": [64, 64]
 			})
-		status_message.emit(npc_name + " added with " + behavior + " behavior", Color.GREEN)
+		status_message.emit(char_name + " added with " + behavior + " behavior", Color.GREEN)
 
 	if _asset_manager:
-		_asset_manager.add_object(char_type, char_type + " character sprite", 1)
+		_asset_manager.add_object(char_type, char_prompt, 1)
 
 	action_executed.emit("add_character", params)
 
@@ -310,46 +397,6 @@ offset_right = 300.0
 offset_bottom = 70.0
 text = "Seed: -"
 """
-
-
-func _get_terrain_prompt(terrain: String) -> String:
-	match terrain:
-		"water":
-			return "blue ocean water, waves, deep sea"
-		"sand":
-			return "beach sand, golden yellow, sandy"
-		"grass":
-			return "green grass, meadow, lush"
-		"forest":
-			return "forest floor, dirt, leaves, undergrowth"
-		"snow":
-			return "white snow, ice, frozen ground"
-		_:
-			return terrain + " terrain"
-
-
-## Sort terrains by elevation (lowest to highest)
-## This ensures terrain generation and transitions work correctly
-func _sort_terrains_by_elevation(terrains: Array) -> Array:
-	# Define elevation order for known terrain types
-	var elevation_order := {
-		"water": 0,
-		"sand": 1,
-		"grass": 2,
-		"dirt": 3,
-		"forest": 4,
-		"mountain": 5,
-		"rock": 5,
-		"snow": 6
-	}
-
-	var sorted := terrains.duplicate()
-	sorted.sort_custom(func(a, b):
-		var elev_a: int = elevation_order.get(a, 3)  # Default to middle elevation
-		var elev_b: int = elevation_order.get(b, 3)
-		return elev_a < elev_b
-	)
-	return sorted
 
 
 ## Validate and save a mechanic script

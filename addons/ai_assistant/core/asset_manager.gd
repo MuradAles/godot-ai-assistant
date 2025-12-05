@@ -125,6 +125,24 @@ func mark_terrain_generated(name: String) -> void:
 		manifest_changed.emit()
 
 
+## Add a terrain variation (tracks which variation indices exist)
+func add_terrain_variation(name: String, variation_index: int) -> void:
+	if _manifest.terrain.has(name):
+		if not _manifest.terrain[name].has("variations"):
+			_manifest.terrain[name].variations = []
+		if variation_index not in _manifest.terrain[name].variations:
+			_manifest.terrain[name].variations.append(variation_index)
+		save_manifest()
+		manifest_changed.emit()
+
+
+## Get terrain variations count
+func get_terrain_variations(name: String) -> Array:
+	if _manifest.terrain.has(name):
+		return _manifest.terrain[name].get("variations", [])
+	return []
+
+
 ## Mark a transition as generated
 func mark_transition_generated(from_terrain: String, to_terrain: String) -> void:
 	var key := from_terrain + "_" + to_terrain
@@ -222,6 +240,27 @@ func set_style(style: String) -> void:
 ## Set the terrain order (for elevation-based generation)
 func set_terrain_order(terrains: Array) -> void:
 	_manifest.terrain_order = terrains
+	save_manifest()
+
+
+## Update the prompt for an asset
+func update_prompt(name: String, asset_type: String, new_prompt: String, data: Dictionary = {}) -> void:
+	match asset_type:
+		"terrain":
+			if _manifest.terrain.has(name):
+				_manifest.terrain[name].prompt = new_prompt
+		"transition":
+			var from_t: String = data.get("from", "")
+			var to_t: String = data.get("to", "")
+			var key := from_t + "_" + to_t
+			if _manifest.transitions.has(key):
+				_manifest.transitions[key].prompt = new_prompt
+		"object":
+			if _manifest.objects.has(name):
+				_manifest.objects[name].prompt = new_prompt
+		"structure":
+			if _manifest.structures.has(name):
+				_manifest.structures[name].prompt = new_prompt
 	save_manifest()
 
 

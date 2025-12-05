@@ -317,6 +317,9 @@ func _add_asset_section(title: String, assets: Dictionary, asset_type: String) -
 
 
 func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void:
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
 	var hbox := HBoxContainer.new()
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
@@ -360,23 +363,11 @@ func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void
 	spacer.custom_minimum_size.x = 8
 	hbox.add_child(spacer)
 
-	# Name and prompt info
-	var info_vbox := VBoxContainer.new()
-	info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
+	# Name label
 	var name_lbl := Label.new()
 	name_lbl.text = name.capitalize()
-	info_vbox.add_child(name_lbl)
-
-	var prompt_text: String = data.get("prompt", "")
-	if not prompt_text.is_empty():
-		var prompt_lbl := Label.new()
-		prompt_lbl.text = prompt_text.left(40) + ("..." if prompt_text.length() > 40 else "")
-		prompt_lbl.add_theme_font_size_override("font_size", 10)
-		prompt_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-		info_vbox.add_child(prompt_lbl)
-
-	hbox.add_child(info_vbox)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(name_lbl)
 
 	# Status indicator
 	var status := Label.new()
@@ -392,35 +383,111 @@ func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void
 	hbox.add_child(status)
 
 	# Buttons - all asset types can be generated/regenerated
+	var gen_btn: Button = null
+	var regen_btn: Button = null
+	var variation_btn: Button = null
+
 	if not is_done:
-		var btn := Button.new()
-		btn.text = "Generate"
-		btn.pressed.connect(_on_generate_asset.bind(name, data, asset_type, btn))
-		hbox.add_child(btn)
+		gen_btn = Button.new()
+		gen_btn.text = "Generate"
+		hbox.add_child(gen_btn)
 	else:
-		var regen_btn := Button.new()
+		regen_btn = Button.new()
 		regen_btn.text = "Regen"
 		regen_btn.tooltip_text = "Regenerate this asset"
-		regen_btn.pressed.connect(_on_regenerate_asset.bind(name, data, asset_type, regen_btn))
 		hbox.add_child(regen_btn)
 
-	_asset_container.add_child(hbox)
+		# Add "+" button for terrain variations (only for generated terrains)
+		if asset_type == "terrain":
+			variation_btn = Button.new()
+			variation_btn.text = "+"
+			variation_btn.tooltip_text = "Generate a variation of this terrain"
+			variation_btn.custom_minimum_size.x = 30
+			hbox.add_child(variation_btn)
+
+	# Show existing variations count for terrains
+	if asset_type == "terrain" and _asset_manager:
+		var variations: Array = _asset_manager.get_terrain_variations(name)
+		if variations.size() > 0:
+			var var_label := Label.new()
+			var_label.text = "v" + str(variations.size())
+			var_label.add_theme_font_size_override("font_size", 10)
+			var_label.add_theme_color_override("font_color", Color(0.5, 0.7, 1.0))
+			var_label.tooltip_text = str(variations.size()) + " variations"
+			hbox.add_child(var_label)
+
+	vbox.add_child(hbox)
+
+	# Editable prompt field
+	var prompt_text: String = data.get("prompt", name)
+	var prompt_edit := LineEdit.new()
+	prompt_edit.text = prompt_text
+	prompt_edit.placeholder_text = "Enter prompt for AI generation..."
+	prompt_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	prompt_edit.add_theme_font_size_override("font_size", 11)
+	prompt_edit.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	# Save prompt when changed
+	prompt_edit.text_changed.connect(_on_prompt_changed.bind(name, asset_type, data))
+	vbox.add_child(prompt_edit)
+
+	# Connect buttons after prompt_edit exists so we can pass it
+	if gen_btn:
+		gen_btn.pressed.connect(_on_generate_asset.bind(name, data, asset_type, gen_btn, prompt_edit))
+	if regen_btn:
+		regen_btn.pressed.connect(_on_regenerate_asset.bind(name, data, asset_type, regen_btn, prompt_edit))
+	if variation_btn:
+		variation_btn.pressed.connect(_on_generate_variation.bind(name, data, variation_btn, prompt_edit))
+
+	_asset_container.add_child(vbox)
 
 
-func _on_generate_asset(name: String, data: Dictionary, asset_type: String, btn: Button) -> void:
+func _on_generate_asset(name: String, data: Dictionary, asset_type: String, btn: Button, prompt_edit: LineEdit) -> void:
 	btn.disabled = true
 	btn.text = "..."
-	if not _asset_generator.generate_single(name, data, asset_type):
+	# Use the current prompt from the edit field
+	var updated_data := data.duplicate()
+	updated_data["prompt"] = prompt_edit.text
+	if not _asset_generator.generate_single(name, updated_data, asset_type):
 		btn.disabled = false
 		btn.text = "Generate"
 
 
-func _on_regenerate_asset(name: String, data: Dictionary, asset_type: String, btn: Button) -> void:
+func _on_regenerate_asset(name: String, data: Dictionary, asset_type: String, btn: Button, prompt_edit: LineEdit) -> void:
 	btn.disabled = true
 	btn.text = "..."
-	if not _asset_generator.regenerate(name, data, asset_type):
+	# Use the current prompt from the edit field
+	var updated_data := data.duplicate()
+	updated_data["prompt"] = prompt_edit.text
+	if not _asset_generator.regenerate(name, updated_data, asset_type):
 		btn.disabled = false
 		btn.text = "Regen"
+
+
+func _on_prompt_changed(new_text: String, name: String, asset_type: String, data: Dictionary) -> void:
+	if not _asset_manager:
+		return
+	# Update the prompt in the manifest
+	_asset_manager.update_prompt(name, asset_type, new_text, data)
+
+
+func _on_generate_variation(name: String, data: Dictionary, btn: Button, prompt_edit: LineEdit) -> void:
+	btn.disabled = true
+	btn.text = "..."
+
+	# Calculate next variation index
+	var existing_variations: Array = _asset_manager.get_terrain_variations(name) if _asset_manager else []
+	var next_index: int = existing_variations.size() + 1
+
+	# Create variation data
+	var variation_data := data.duplicate()
+	variation_data["prompt"] = prompt_edit.text
+	variation_data["variation_index"] = next_index
+
+	if not _asset_generator.generate_single(name, variation_data, "terrain_variation"):
+		btn.disabled = false
+		btn.text = "+"
+	else:
+		_chat_handler.sys("Generating variation " + str(next_index) + " for " + name, Color.CYAN)
 
 
 # ==================== WORLD RUNNER ====================

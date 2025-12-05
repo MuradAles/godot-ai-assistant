@@ -151,9 +151,18 @@ func _start_generation(name: String, data: Dictionary, asset_type: String) -> vo
 	var prompt: String = data.get("prompt", name)
 	var tile_size: int = _asset_manager.get_tile_size() if _asset_manager else 32
 
+	# Set art style from manifest
+	var art_style: String = _asset_manager.get_style() if _asset_manager else "pixel art"
+	client.set_art_style(art_style)
+
 	match asset_type:
 		"terrain":
 			client.generate_terrain(name, prompt, tile_size)
+		"terrain_variation":
+			var base_file: String = data.get("file", "terrain/" + name + ".png")
+			var input_image := ProjectSettings.globalize_path(_asset_manager.get_asset_path(base_file))
+			var variation_idx: int = data.get("variation_index", 1)
+			client.generate_terrain_variation(name, prompt, input_image, tile_size, variation_idx)
 		"transition":
 			var from_t: String = data.get("from", "")
 			var to_t: String = data.get("to", "")
@@ -240,6 +249,9 @@ func _on_completed(image_data: PackedByteArray, asset_info: Dictionary, client: 
 		match asset_type:
 			"terrain":
 				_asset_manager.mark_terrain_generated(asset_name)
+			"terrain_variation":
+				var variation_idx: int = asset_info.get("variation_index", 1)
+				_asset_manager.add_terrain_variation(asset_name, variation_idx)
 			"transition":
 				var from_t: String = asset_info.get("from", "")
 				var to_t: String = asset_info.get("to", "")

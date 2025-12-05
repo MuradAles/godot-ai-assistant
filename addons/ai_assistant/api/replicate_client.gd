@@ -25,10 +25,15 @@ const RD_TILE_MODEL := "retro-diffusion/rd-tile"
 
 var _api_key := ""
 var _node_parent: Node
+var _art_style := "pixel art"  # Customizable art style from manifest
 
 # Per-instance state for this specific generation
 var _prediction_id := ""
 var _asset_info: Dictionary = {}
+
+
+func set_art_style(style: String) -> void:
+	_art_style = style if not style.is_empty() else "pixel art"
 
 
 func setup(api_key: String, parent_node: Node) -> void:
@@ -44,7 +49,9 @@ func has_api_key() -> bool:
 ## Uses 'single_tile' for fast generation (tileset would take 30-60s)
 ## rd-tile supports 16-384px tiles
 func generate_terrain(terrain_name: String, prompt: String, tile_size: int = 16) -> void:
-	var full_prompt := prompt + ", pixel art, seamless tileable texture, top-down rpg terrain, no borders, no grid lines, continuous pattern"
+	# Build prompt optimized for seamless top-down terrain tiles
+	# Key elements: top-down view, seamless, tileable, no borders
+	var full_prompt := prompt + ", " + _art_style + ", top-down view, bird's eye view, seamless tileable texture, no edges, no borders, continuous repeating pattern, game terrain tile"
 
 	_asset_info = {
 		"type": "terrain",
@@ -58,7 +65,37 @@ func generate_terrain(terrain_name: String, prompt: String, tile_size: int = 16)
 		"prompt": full_prompt,
 		"style": "single_tile",
 		"width": gen_size,
-		"height": gen_size
+		"height": gen_size,
+		"bypass_prompt_expansion": true  # More literal prompt interpretation
+	})
+
+
+## Generate variations of an existing terrain tile
+## Uses 'tile_variation' style with the base tile as input_image
+## Returns multiple variations (num_variations defaults to 3)
+func generate_terrain_variation(terrain_name: String, prompt: String, input_image_path: String, tile_size: int = 16, variation_index: int = 1) -> void:
+	var base64_image := _image_to_data_uri(input_image_path)
+	if base64_image.is_empty():
+		generation_error.emit("Could not read base terrain image: " + input_image_path)
+		return
+
+	var full_prompt := prompt + ", " + _art_style + ", variation, top-down view, seamless tileable texture"
+
+	_asset_info = {
+		"type": "terrain_variation",
+		"name": terrain_name,
+		"variation_index": variation_index,
+		"file": "terrain/" + terrain_name + "_v" + str(variation_index) + ".png"
+	}
+
+	var gen_size := maxi(tile_size, 16)
+	_start_prediction({
+		"prompt": full_prompt,
+		"input_image": base64_image,
+		"style": "tile_variation",
+		"width": gen_size,
+		"height": gen_size,
+		"bypass_prompt_expansion": true
 	})
 
 
