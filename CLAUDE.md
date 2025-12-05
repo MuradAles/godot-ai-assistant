@@ -31,22 +31,27 @@ Since this is a Godot editor plugin, you cannot run traditional test commands. I
 ```
 addons/ai_assistant/
 ├── plugin.gd                    # EditorPlugin entry point
-├── core/
-│   ├── asset_manager.gd         # Manifest management (terrains, objects, transitions)
-│   └── game_state.gd            # World state and chat history
 ├── api/
-│   ├── replicate_client.gd      # RetroDiffusion API integration
-│   └── claude_client.gd         # Claude AI for chat/world building
+│   └── replicate_client.gd      # RetroDiffusion API integration
+├── core/
+│   ├── ai_streaming.gd          # SSE streaming for Claude API
+│   ├── asset_manager.gd         # Manifest management (terrains, objects, transitions)
+│   ├── game_state.gd            # World state and chat history
+│   ├── intent_parser.gd         # Parse AI responses for actions
+│   └── script_validator.gd      # Validate generated GDScript
 ├── ui/
 │   ├── ai_assistant_dock.gd     # Main dock UI with tabs (Chat, Assets, Settings)
 │   ├── asset_generator.gd       # Orchestrates asset generation
-│   └── chat_handler.gd          # Chat UI and AI response parsing
+│   ├── chat_handler.gd          # Chat UI, Claude API, and response parsing
+│   ├── settings_manager.gd      # API keys and settings persistence
+│   └── world_builder.gd         # World building from AI actions
 └── world/
-    ├── world_runner.gd          # Runtime world display and player
     ├── world_assets.gd          # Asset loading from manifest
+    ├── world_runner.gd          # Runtime world display and player
     ├── world_terrain.gd         # Procedural terrain generation (noise-based)
     ├── world_tilemap.gd         # TileMap building with variations
-    └── world_transitions.gd     # Wang tile transition system
+    ├── world_transitions.gd     # Wang tile transition system
+    └── world_test.tscn          # Test scene for world preview
 ```
 
 ### Key Systems
