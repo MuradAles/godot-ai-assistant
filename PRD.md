@@ -1,8 +1,8 @@
 # Product Requirements Document (PRD)
 # Godot AI Game Generator Plugin
 
-**Version:** 1.0  
-**Target Platform:** Godot 4.5  
+**Version:** 2.0
+**Target Platform:** Godot 4.5
 **Last Updated:** December 2024
 
 ---
@@ -10,18 +10,30 @@
 ## 1. Executive Summary
 
 ### 1.1 Product Vision
-A Godot Editor plugin that enables users to generate playable games by describing them in natural language. The plugin combines Claude AI for code/logic generation with Retro Diffusion's RD-Tile API for asset generation, creating a complete automated game development pipeline.
+A conversational AI game builder for Godot. Users describe their game step-by-step in natural language, and the plugin generates a playable game in real-time. The game is always playable with colored placeholders, and AI-generated assets can be added anytime to enhance visuals.
 
 ### 1.2 Core Value Proposition
 ```
-User describes game in plain English
-            ↓
-Plugin generates playable Godot project
-            ↓
-User plays immediately
+User describes game in chat
+        ↓
+Playable game with colored boxes (instant)
+        ↓
+User refines: "add trees", "player can swim"
+        ↓
+Claude generates code for each feature
+        ↓
+User generates AI art when ready (optional)
+        ↓
+Polished game with real sprites
 ```
 
-### 1.3 Target Users
+### 1.3 Key Principles
+1. **Always Playable** - Colored placeholders mean the game works immediately
+2. **Conversational** - Natural language, not forms or menus
+3. **Iterative** - Build piece by piece, test constantly
+4. **AI-Powered** - Claude generates all game code, Replicate generates art
+
+### 1.4 Target Users
 - Indie game developers wanting rapid prototyping
 - Non-programmers interested in game creation
 - Educators teaching game development concepts
@@ -29,399 +41,365 @@ User plays immediately
 
 ---
 
-## 2. Product Overview
+## 2. User Flow
 
-### 2.1 High-Level Architecture
+### 2.1 Complete Game Creation Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                  GODOT AI GAME GENERATOR                    │
+│  PHASE 1: MAP GENERATION                                    │
 ├─────────────────────────────────────────────────────────────┤
+│  User: "Create an RPG with a beach and forest"              │
+│  Plugin: Generates island map with water → sand → grass     │
+│  Result: Colored boxes, immediately playable                │
 │                                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
-│  │   Claude    │    │   RD-Tile   │    │   Godot     │     │
-│  │   Sonnet    │    │    API      │    │   Engine    │     │
-│  │   (Brain)   │    │  (Artist)   │    │  (Output)   │     │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘     │
-│         │                  │                  │             │
-│         └────────┬─────────┴──────────────────┘             │
-│                  │                                          │
-│         ┌────────▼────────┐                                 │
-│         │  Plugin Core    │                                 │
-│         │  (Coordinator)  │                                 │
-│         └─────────────────┘                                 │
+│  User: "Regenerate" / "Make it bigger" / "More water"       │
+│  Plugin: Adjusts and regenerates                            │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PHASE 2: OBJECTS                                           │
+├─────────────────────────────────────────────────────────────┤
+│  User: "Add trees in the forest"                            │
+│  Plugin: Places tree objects (green rectangles)             │
 │                                                             │
+│  User: "Add rocks near the water"                           │
+│  Plugin: Places rock objects (gray rectangles)              │
+│                                                             │
+│  User: "Add a house in the center"                          │
+│  Plugin: Places house structure                             │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PHASE 3: CHARACTERS                                        │
+├─────────────────────────────────────────────────────────────┤
+│  User: "Create a player character"                          │
+│  Plugin: Spawns player with WASD movement (blue rectangle)  │
+│                                                             │
+│  User: "Add an NPC shopkeeper near the house"               │
+│  Plugin: Spawns NPC at location                             │
+│                                                             │
+│  User: "Add enemies that wander around"                     │
+│  Plugin: Claude generates wandering AI script               │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PHASE 4: MECHANICS                                         │
+├─────────────────────────────────────────────────────────────┤
+│  User: "Player can cut trees and get wood"                  │
+│  Plugin: Claude generates interaction + inventory code      │
+│                                                             │
+│  User: "Player can't swim in deep water"                    │
+│  Plugin: Claude generates water collision logic             │
+│                                                             │
+│  User: "Player can sell wood to shopkeeper"                 │
+│  Plugin: Claude generates shop/transaction system           │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  ANYTIME: AI ART GENERATION                                 │
+├─────────────────────────────────────────────────────────────┤
+│  User clicks "Generate Art" for any asset                   │
+│  Plugin: Calls Replicate API                                │
+│  Result: Colored box replaced with pixel art sprite         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Plugin Interface Structure
-
-The plugin provides two main tabs:
-
-| Tab | Purpose | Primary API |
-|-----|---------|-------------|
-| **Chat** | Code generation, scene creation, game logic | Claude API |
-| **Assets** | Tileset generation, sprites, visual assets | RD-Tile API |
+### 2.2 Flexible Phase Navigation
+The phases are guidelines, not strict requirements. User can:
+- Add mechanics before finishing objects
+- Go back and modify the map after adding characters
+- Generate art for some assets while leaving others as placeholders
 
 ---
 
-## 3. Functional Requirements
+## 3. Technical Architecture
 
-### 3.1 Chat Tab Features
-
-#### 3.1.1 Game Description Input
-- Text input field for natural language game descriptions
-- Support for multi-line descriptions
-- Example prompts/suggestions for new users
-
-#### 3.1.2 AI Analysis & Planning
-- Parse user description to identify:
-  - Game type (top-down, platformer, etc.)
-  - Required terrains and assets
-  - Entities (player, NPCs, items)
-  - Game mechanics and logic
-  - UI requirements
-
-#### 3.1.3 Code Generation
-- Generate valid GDScript for Godot 4.5
-- Create scene structures (.tscn files)
-- Implement game logic (movement, interactions, win/lose conditions)
-- Connect signals between nodes
-
-#### 3.1.4 Validation & Retry
-- Syntax validation of generated GDScript
-- Automatic retry on errors (max 3 attempts)
-- Error feedback to Claude for correction
-
-#### 3.1.5 Iterative Updates
-- Support follow-up requests ("Add enemies", "Change speed")
-- Modify existing generated files
-- Preserve user customizations where possible
-
-### 3.2 Assets Tab Features
-
-#### 3.2.1 Tileset Generator
-- Text prompt input for terrain description
-- Tile size selection (16x16, 32x32)
-- Preview of generated tileset
-- Save to project functionality
-
-#### 3.2.2 RD-Tile Integration
-- Call RD-Tile API with style "tileset"
-- Receive 4×5 grid (20 tiles) at 64×80 pixels for 16px tiles
-- Consistent wang-style transition format
-
-#### 3.2.3 Automatic TileSet Configuration
-- Load generated PNG as TileSetAtlasSource
-- Apply pre-mapped peering bits (RD_TILE_MAP)
-- Configure terrain sets automatically
-- Save as .tres resource
-
-#### 3.2.4 Multi-Terrain Support
-- Support terrain pairs (e.g., Water↔Sand, Sand↔Grass)
-- Layered TileMapLayer approach for 3+ terrains
-- Ring-based generation (terrains never skip layers)
-
-### 3.3 Map Generation Features
-
-#### 3.3.1 Procedural Generation
-- FastNoiseLite-based terrain distribution
-- Island, continent, or custom layouts
-- Configurable thresholds for terrain boundaries
-
-#### 3.3.2 Terrain Auto-Tiling
-- Use `set_cells_terrain_connect()` for automatic tile selection
-- Godot handles transition tile selection
-- Support for multiple terrain layers
-
----
-
-## 4. Technical Specifications
-
-### 4.1 RD-Tile Tileset Format
-
-#### 4.1.1 Output Specification
-```
-Dimensions: 64×80 pixels (for 16×16 tiles)
-Grid: 4 columns × 5 rows = 20 tiles
-Format: PNG with transitions
-```
-
-#### 4.1.2 RD_TILE_MAP Peering Configuration
-
-The plugin uses a pre-analyzed mapping of RD-Tile's consistent output format:
-
-```gdscript
-const RD_TILE_MAP = {
-    # Water tiles (terrain 0)
-    0:  {pos: Vector2i(0,0), terrain: 0, ...},  # Solid water
-    1:  {pos: Vector2i(1,0), terrain: 0, ...},  # BR corner sand
-    2:  {pos: Vector2i(2,0), terrain: 0, ...},  # R+B edge sand
-    3:  {pos: Vector2i(3,0), terrain: 0, ...},  # BL corner sand
-    4:  {pos: Vector2i(0,1), terrain: 0, ...},  # Solid water (var)
-    8:  {pos: Vector2i(0,2), terrain: 0, ...},  # Solid water (var)
-    9:  {pos: Vector2i(1,2), terrain: 0, ...},  # T+TR edge sand
-    11: {pos: Vector2i(3,2), terrain: 0, ...},  # T+L corner sand
-    15: {pos: Vector2i(3,3), terrain: 0, ...},  # TR+BL corners
-    19: {pos: Vector2i(3,4), terrain: 0, ...},  # TL+BR corners
-    
-    # Sand tiles (terrain 1)
-    5:  {pos: Vector2i(1,1), terrain: 1, ...},  # TL+BL water
-    6:  {pos: Vector2i(2,1), terrain: 1, ...},  # Solid sand
-    7:  {pos: Vector2i(3,1), terrain: 1, ...},  # TR+BR water
-    10: {pos: Vector2i(2,2), terrain: 1, ...},  # BL+BR water
-    12: {pos: Vector2i(0,3), terrain: 1, ...},  # Solid sand (var)
-    13: {pos: Vector2i(1,3), terrain: 1, ...},  # BR water
-    14: {pos: Vector2i(2,3), terrain: 1, ...},  # BL water
-    16: {pos: Vector2i(0,4), terrain: 1, ...},  # Solid sand (var)
-    17: {pos: Vector2i(1,4), terrain: 1, ...},  # TR water
-    18: {pos: Vector2i(2,4), terrain: 1, ...},  # TL water
-}
-```
-
-#### 4.1.3 Peering Bit Values
-Each tile includes 8 directional peering bits:
-- `top`, `right`, `bottom`, `left` (cardinal)
-- `top_left`, `top_right`, `bottom_left`, `bottom_right` (corners)
-
-Values: `0` = terrain 0 (outside), `1` = terrain 1 (inside)
-
-### 4.2 Godot 4.5 API Usage
-
-#### 4.2.1 TileMapLayer (NOT deprecated TileMap)
-```gdscript
-var layer = TileMapLayer.new()
-layer.tile_set = tileset_resource
-layer.set_cells_terrain_connect(cells, terrain_set, terrain)
-```
-
-#### 4.2.2 TileSet Terrain Configuration
-```gdscript
-# Create terrain set
-tileset.add_terrain_set()
-tileset.set_terrain_set_mode(0, TileSet.TERRAIN_MODE_MATCH_CORNERS_AND_SIDES)
-
-# Add terrains
-tileset.add_terrain(0)  # terrain_set 0, terrain 0
-tileset.add_terrain(0)  # terrain_set 0, terrain 1
-
-# Set peering bits on TileData
-var tile_data = atlas_source.get_tile_data(Vector2i(col, row), 0)
-tile_data.terrain_set = 0
-tile_data.terrain = terrain_id
-tile_data.set_terrain_peering_bit(TileSet.CELL_NEIGHBOR_TOP_SIDE, value)
-```
-
-#### 4.2.3 FastNoiseLite for Procedural Generation
-```gdscript
-var noise = FastNoiseLite.new()
-noise.seed = randi()
-noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
-noise.frequency = 0.04
-
-var value = noise.get_noise_2d(x, y)  # Returns -1 to 1
-value = (value + 1.0) / 2.0  # Normalize to 0-1
-```
-
-### 4.3 Multi-Terrain Layering System
-
-For 3+ terrains, use stacked TileMapLayers:
+### 3.1 Visual Layer System
 
 ```
-Terrain Order (bottom to top):
-  Layer 0: Water (base, fills all)
-  Layer 1: Sand (transparent where no sand)
-  Layer 2: Grass (transparent where no grass)
-
-Noise Thresholds:
-  value < 0.3  → Water
-  value < 0.6  → Sand
-  value >= 0.6 → Grass
-
-Rule: Adjacent terrains only (Water↔Sand↔Grass)
-      Water never directly touches Grass
+LAYER 1: Placeholders (Always Available)
+┌─────────────────────────────────────┐
+│  Terrain: Colored rectangles        │
+│  - Water: Blue                      │
+│  - Sand: Yellow                     │
+│  - Grass: Green                     │
+│                                     │
+│  Objects: Simple shapes             │
+│  - Trees: Green circles on brown    │
+│  - Rocks: Gray ovals                │
+│  - Houses: Orange rectangles        │
+│                                     │
+│  Characters: Colored rectangles     │
+│  - Player: Blue with face dots      │
+│  - NPCs: Various colors             │
+└─────────────────────────────────────┘
+            ↓ (User generates art)
+LAYER 2: AI-Generated Sprites
+┌─────────────────────────────────────┐
+│  Replicate API generates:           │
+│  - Terrain tiles (seamless)         │
+│  - Object sprites (transparent bg)  │
+│  - Character sprites                │
+│                                     │
+│  Sprites replace placeholders       │
+│  Game logic unchanged               │
+└─────────────────────────────────────┘
 ```
 
----
+### 3.2 Memory Bank (JSON State)
 
-## 5. External API Specifications
+All game state persisted in `res://game_project.json`:
 
-### 5.1 Claude API Integration
-
-#### 5.1.1 Endpoint
-```
-POST https://api.anthropic.com/v1/messages
-```
-
-#### 5.1.2 Model
-```
-claude-sonnet-4-20250514
-```
-
-#### 5.1.3 System Prompt Requirements
-- Godot 4.5 specific syntax
-- GDScript best practices
-- Scene structure guidelines
-- Signal connection patterns
-
-### 5.2 RD-Tile API Integration
-
-#### 5.2.1 Endpoint (via Replicate)
-```
-POST https://api.replicate.com/v1/predictions
-Model: retro-diffusion/rd-tile
-```
-
-#### 5.2.2 Tileset Request Format
 ```json
 {
-    "style": "tileset",
-    "width": 16,
-    "height": 16,
-    "prompt": "terrain description here",
-    "num_images": 1
+  "version": "1.0",
+  "project_name": "My RPG",
+  "created_at": "2024-12-04T10:00:00Z",
+  "updated_at": "2024-12-04T12:30:00Z",
+
+  "world": {
+    "width": 128,
+    "height": 128,
+    "seed": 12345,
+    "theme": "beach",
+    "terrains": ["water", "sand", "grass"],
+    "generated": true
+  },
+
+  "objects": {
+    "trees": {
+      "count": 50,
+      "placement": "forest_areas",
+      "sprite_generated": false
+    },
+    "rocks": {
+      "count": 20,
+      "placement": "near_water",
+      "sprite_generated": true,
+      "sprite_path": "res://assets/objects/rock.png"
+    }
+  },
+
+  "characters": {
+    "player": {
+      "name": "Hero",
+      "spawn": "center",
+      "sprite_generated": false,
+      "abilities": ["move", "interact"],
+      "script_path": "res://scripts/player.gd"
+    },
+    "npcs": [
+      {
+        "id": "shopkeeper",
+        "name": "Bob",
+        "position": [64, 64],
+        "behavior": "stationary",
+        "dialogue": true
+      }
+    ]
+  },
+
+  "mechanics": [
+    {
+      "id": "tree_cutting",
+      "description": "Player can cut trees to get wood",
+      "script_path": "res://scripts/mechanics/tree_cutting.gd",
+      "enabled": true
+    },
+    {
+      "id": "inventory",
+      "description": "Player has inventory for items",
+      "script_path": "res://scripts/mechanics/inventory.gd",
+      "enabled": true
+    }
+  ],
+
+  "conversation_history": [
+    {"role": "user", "content": "Create an RPG with beach and forest"},
+    {"role": "assistant", "content": "Created island world with water, sand, grass..."}
+  ]
 }
 ```
 
-#### 5.2.3 Response Format
-```json
-{
-    "output": ["https://replicate.delivery/.../output_0.png"],
-    "status": "succeeded"
-}
+### 3.3 Claude Code Generation
+
+Claude generates ALL game code. No templates.
+
+**System Prompt Requirements:**
+- Godot 4.5 GDScript syntax
+- Use `TileMapLayer` (not deprecated `TileMap`)
+- Use `@export` for exposed variables
+- Use `signal_name.emit()` for signals
+- Proper node paths and scene structure
+
+**Code Generation Flow:**
 ```
+1. User request: "Player can cut trees"
+2. Plugin sends to Claude with:
+   - System prompt (Godot 4.5 knowledge)
+   - Current game state (from memory bank)
+   - Specific request
+3. Claude returns GDScript code
+4. Plugin validates syntax (GDScript.reload())
+5. If error: Send error back to Claude, retry (max 3)
+6. If success: Save script, attach to node
+7. Update memory bank
+```
+
+### 3.4 Map Generation
+
+Uses FastNoiseLite for procedural terrain:
+
+```gdscript
+# Terrain distribution based on elevation
+# Low elevation = water (edges)
+# Mid elevation = sand (transition)
+# High elevation = grass/forest (center)
+
+# Island-style: Distance from center affects elevation
+var center = Vector2(width/2, height/2)
+var distance = position.distance_to(center) / max_distance
+var elevation = noise.get_noise_2d(x, y) - distance * 0.5
+
+# Terrain thresholds
+if elevation < 0.3: return WATER
+if elevation < 0.45: return SAND
+return GRASS
+```
+
+**Terrain Transitions:**
+- Adjacent terrains only (water ↔ sand ↔ grass)
+- No skipping (water never touches grass directly)
+- Transitions rendered via Replicate-generated tilesets
 
 ---
 
-## 6. File Structure
+## 4. Plugin Structure
 
-### 6.1 Plugin Structure
+### 4.1 File Structure
 ```
-addons/ai_game_generator/
+addons/ai_assistant/
 ├── plugin.cfg
 ├── plugin.gd                    # Main EditorPlugin
 ├── ui/
-│   ├── main_dock.tscn          # Tab container
-│   ├── main_dock.gd
-│   ├── chat_tab.tscn           # Chat interface
-│   ├── chat_tab.gd
-│   ├── assets_tab.tscn         # Assets interface
-│   └── assets_tab.gd
+│   ├── ai_assistant_dock.tscn   # Main dock UI
+│   └── ai_assistant_dock.gd     # Chat + Assets tabs
 ├── core/
-│   ├── claude_api.gd           # Claude API wrapper
-│   ├── rdtile_api.gd           # RD-Tile API wrapper
-│   ├── tileset_builder.gd      # TileSet creation & peering bits
-│   ├── map_generator.gd        # Procedural map generation
-│   ├── scene_builder.gd        # Scene/node creation
-│   └── script_validator.gd     # GDScript validation
-├── data/
-│   └── rd_tile_map.gd          # RD_TILE_MAP constant
-└── templates/
-    ├── player_movement.gd      # Common script templates
-    └── npc_dialogue.gd
+│   ├── game_state.gd            # Memory bank manager
+│   ├── ai_streaming.gd          # Claude API streaming
+│   ├── script_validator.gd      # GDScript validation
+│   ├── code_injector.gd         # Attach scripts to nodes
+│   └── asset_manager.gd         # Track generated assets
+├── api/
+│   └── replicate_client.gd      # Replicate API for art
+├── world/
+│   ├── world_generator.gd       # Noise-based terrain
+│   └── world_runner.gd          # Runtime world display
+└── prompts/
+    ├── system_prompt.md         # Claude system prompt
+    └── godot_knowledge.md       # Godot 4.5 reference
 ```
 
-### 6.2 Generated Project Structure
+### 4.2 Generated Project Structure
 ```
 res://
+├── game_project.json            # Memory bank
+├── Main.tscn                    # Entry point
 ├── assets/
-│   ├── tilesets/               # Generated PNG files
-│   └── sprites/                # Generated sprite files
-├── tilesets/
-│   └── *.tres                  # TileSet resources
+│   ├── terrain/                 # Generated terrain sprites
+│   ├── objects/                 # Tree, rock, house sprites
+│   └── characters/              # Player, NPC sprites
 ├── scripts/
-│   └── *.gd                    # Generated GDScript files
-├── scenes/
-│   ├── entities/               # Player, NPC, Item scenes
-│   └── maps/                   # Generated map scenes
-└── Main.tscn                   # Entry point scene
+│   ├── player.gd                # Player controller
+│   ├── npc.gd                   # NPC behaviors
+│   └── mechanics/               # Feature scripts
+│       ├── tree_cutting.gd
+│       ├── inventory.gd
+│       └── shop.gd
+└── scenes/
+    ├── Player.tscn
+    ├── NPC.tscn
+    └── objects/
+        ├── Tree.tscn
+        └── Rock.tscn
 ```
 
 ---
 
-## 7. User Workflows
+## 5. External APIs
 
-### 7.1 Complete Game Generation Flow
-
-```
-1. User opens plugin
-2. User types: "RPG on tropical island with NPCs"
-3. Plugin → Claude: Analyze request
-4. Claude returns: Asset list + code plan
-5. Plugin shows plan to user
-6. User clicks [Generate]
-7. Plugin → RD-Tile: Generate tilesets
-8. Plugin: Create TileSet resources with peering bits
-9. Plugin: Generate map with FastNoiseLite
-10. Plugin → Claude: Generate scripts
-11. Plugin: Validate scripts
-12. Plugin: Create scenes, connect signals
-13. Plugin: Save all files
-14. User clicks [Play] → Game runs
-```
-
-### 7.2 Asset-Only Generation Flow
+### 5.1 Claude API (Code Generation)
 
 ```
-1. User clicks Assets tab
-2. User types: "volcanic rock and lava"
-3. User selects tile size: 16x16
-4. User clicks [Generate Tileset]
-5. Plugin → RD-Tile: Request tileset
-6. Plugin: Show preview
-7. User clicks [Save to Project]
-8. Plugin: Create TileSet with peering bits
-9. Plugin: Save PNG + .tres files
+Endpoint: https://api.anthropic.com/v1/messages
+Models: claude-sonnet-4-5-20250929, claude-opus-4-5-20251101
+
+Used for:
+- Understanding user intent
+- Generating GDScript code
+- Creating game mechanics
+- Conversation and guidance
+```
+
+### 5.2 Replicate API (Art Generation)
+
+```
+Endpoint: https://api.replicate.com/v1/predictions
+Model: retro-diffusion/rd-tile
+
+Used for:
+- Terrain tile sprites
+- Object sprites (trees, rocks, houses)
+- Character sprites
+
+Prompt style:
+"pixel art [object], top-down RPG game asset, transparent background"
 ```
 
 ---
 
-## 8. Success Criteria
+## 6. Success Criteria
 
-### 8.1 Functional Success
-- [ ] Generate playable game from text description in <2 minutes
-- [ ] Tileset transitions render correctly with no visual gaps
-- [ ] Generated GDScript passes syntax validation
-- [ ] Multi-terrain maps generate with proper layering
+### 6.1 Core Functionality
+- [ ] User can create playable game from chat in < 2 minutes
+- [ ] Colored placeholder world generates instantly
+- [ ] Claude generates valid GDScript for mechanics
+- [ ] Script validation catches errors before crashing
+- [ ] Memory bank persists all state across sessions
 
-### 8.2 Technical Success
-- [ ] All Godot 4.5 APIs used correctly
-- [ ] RD-Tile peering bit mapping 100% accurate
-- [ ] No deprecated API usage (TileMap vs TileMapLayer)
-- [ ] Resource files save and load correctly
+### 6.2 User Experience
+- [ ] Conversation feels natural, not like filling forms
+- [ ] Game is always playable at every step
+- [ ] Clear feedback on what was created/changed
+- [ ] Easy to iterate ("make it bigger", "add more trees")
 
-### 8.3 User Experience Success
-- [ ] Plugin UI intuitive without documentation
-- [ ] Clear progress feedback during generation
-- [ ] Meaningful error messages on failure
-- [ ] Generated code readable and modifiable
+### 6.3 Code Quality
+- [ ] Generated GDScript follows Godot 4.5 best practices
+- [ ] No deprecated API usage
+- [ ] Scripts are readable and modifiable by user
+- [ ] Clean separation of concerns (player.gd, inventory.gd, etc.)
 
 ---
 
-## 9. Constraints & Limitations
+## 7. Out of Scope (v1.0)
 
-### 9.1 Known Limitations
-- Maximum 2 terrains per tileset (RD-Tile constraint)
-- 3+ terrains require layered approach
-- No 3-way terrain transitions (e.g., where sand, water, and grass all meet)
-- API rate limits apply (Claude & Replicate)
-
-### 9.2 Out of Scope for v1.0
 - 3D game generation
-- Custom shader generation
+- Multiplayer networking
 - Audio/music generation
-- Multiplayer networking code
-- Mobile-specific optimizations
+- Custom shaders
+- Mobile export optimization
+- Complex AI pathfinding (A* etc.)
 
 ---
 
-## 10. Glossary
+## 8. Glossary
 
 | Term | Definition |
 |------|------------|
-| **Peering Bits** | Values that tell Godot what terrain to expect in each direction |
-| **Wang Tiles** | 16-tile format for 2-terrain edge transitions |
-| **Blob Tiles** | 47-tile format including corner transitions |
-| **RD-Tile** | Retro Diffusion's tile generation API |
-| **Terrain Set** | A group of related terrains in a TileSet |
-| **TileMapLayer** | Godot 4.3+ node for tile-based maps (replaces TileMap) |
+| **Memory Bank** | JSON file storing all game state |
+| **Placeholder** | Colored shape representing an object before AI art |
+| **Mechanic** | Game feature with code (inventory, combat, etc.) |
+| **Code Injection** | Attaching generated scripts to scene nodes |
+| **Terrain Ring** | Concentric terrain distribution (water outside, land inside) |
+| **TileMapLayer** | Godot 4.5 node for tile-based maps |

@@ -2,7 +2,7 @@
 extends Control
 
 ## AI Assistant Dock - Chat + Assets tabs
-## Chat analyzes user input and populates manifest dynamically
+## Uses modular components for chat, assets, world building, and settings
 
 # UI References
 var _tab_container: TabContainer
@@ -18,29 +18,17 @@ var _run_world_btn: Button
 var _asset_status: Label
 
 var _plugin_reference: EditorPlugin = null
-var _settings_dialog: Window = null
-
-# State
-var _is_processing := false
-var _api_key := ""
-var _replicate_key := ""
-var _ai_model := "claude-sonnet-4-5-20250929"
 var _setup_done := false
-var _current_world_path := ""  # Path to the current world scene
 
-const AI_MODELS := {
-	"Claude Sonnet 4.5": "claude-sonnet-4-5-20250929",
-	"Claude Opus 4.5": "claude-opus-4-5-20251101"
-}
-
-# Components
-var _asset_manager: RefCounted = null
-var _replicate_client: RefCounted = null
-var _ai_stream: RefCounted = null
-
-# Streaming
-var _stream_rtl: RichTextLabel = null
-var _stream_content := ""
+# Modular components
+var _chat_handler: ChatHandler
+var _asset_generator: AssetGenerator
+var _world_builder: WorldBuilder
+var _settings_manager: SettingsManager
+var _asset_manager: RefCounted
+var _game_state: RefCounted
+var _intent_parser: RefCounted
+var _script_validator: RefCounted
 
 
 func _ready() -> void:
@@ -55,33 +43,35 @@ func _setup() -> void:
 
 	_load_components()
 	_find_ui_nodes()
+	_setup_modules()
 	_connect_signals()
-	_load_settings()
+	_settings_manager.load_settings()
+	_apply_settings()
 	_refresh_assets_tab()
+	_chat_handler.restore_history()
 
 
 func _load_components() -> void:
+	# Game State (Memory Bank)
+	var GSScript = load("res://addons/ai_assistant/core/game_state.gd")
+	if GSScript and GSScript.can_instantiate():
+		_game_state = GSScript.new()
+
+	# Intent Parser
+	var IPScript = load("res://addons/ai_assistant/core/intent_parser.gd")
+	if IPScript and IPScript.can_instantiate():
+		_intent_parser = IPScript.new()
+
+	# Script Validator
+	var SVScript = load("res://addons/ai_assistant/core/script_validator.gd")
+	if SVScript and SVScript.can_instantiate():
+		_script_validator = SVScript.new()
+
 	# Asset Manager
 	var AMScript = load("res://addons/ai_assistant/core/asset_manager.gd")
-	if AMScript:
+	if AMScript and AMScript.can_instantiate():
 		_asset_manager = AMScript.new()
 		_asset_manager.manifest_changed.connect(_refresh_assets_tab)
-
-	# Replicate Client
-	var RCScript = load("res://addons/ai_assistant/api/replicate_client.gd")
-	if RCScript:
-		_replicate_client = RCScript.new()
-		_replicate_client.generation_progress.connect(_on_gen_progress)
-		_replicate_client.generation_completed.connect(_on_gen_completed)
-		_replicate_client.generation_error.connect(_on_gen_error)
-
-	# AI Streaming (for chat)
-	var StreamScript = load("res://addons/ai_assistant/core/ai_streaming.gd")
-	if StreamScript:
-		_ai_stream = StreamScript.new()
-		_ai_stream.chunk_received.connect(_on_stream_chunk)
-		_ai_stream.stream_finished.connect(_on_stream_finished)
-		_ai_stream.stream_error.connect(_on_stream_error)
 
 
 func _find_ui_nodes() -> void:
@@ -98,24 +88,59 @@ func _find_ui_nodes() -> void:
 	_asset_status = _find("AssetStatus") as Label
 
 
+func _setup_modules() -> void:
+	# Settings Manager
+	_settings_manager = SettingsManager.new()
+	_settings_manager.setup(self)
+	_settings_manager.settings_saved.connect(_on_settings_saved)
+
+	# Chat Handler
+	_chat_handler = ChatHandler.new()
+	_chat_handler.setup(_chat_container, _chat_scroll, _game_state)
+	_chat_handler.scroll_requested.connect(_scroll_chat)
+	_chat_handler.set_decision_callback(_on_ai_decision)
+	_chat_handler.set_mechanic_callback(_on_mechanic_generated)
+
+	# Asset Generator
+	_asset_generator = AssetGenerator.new()
+	_asset_generator.setup(_asset_manager, self)
+	_asset_generator.generation_status_changed.connect(_on_gen_status)
+	_asset_generator.asset_saved.connect(_on_asset_saved)
+	_asset_generator.generation_error.connect(_on_gen_error)
+	_asset_generator.assets_refreshed.connect(_refresh_assets_tab)
+
+	# World Builder
+	_world_builder = WorldBuilder.new()
+	_world_builder.setup(_asset_manager, _game_state, _script_validator)
+	_world_builder.world_created.connect(_on_world_created)
+	_world_builder.action_executed.connect(_on_action_executed)
+	_world_builder.status_message.connect(_on_status_message)
+
+
 func _connect_signals() -> void:
 	if _send_button:
 		_send_button.pressed.connect(_on_send_pressed)
 	if _clear_button:
-		_clear_button.pressed.connect(_clear_chat)
+		_clear_button.pressed.connect(_on_clear_pressed)
 	if _settings_button:
-		_settings_button.pressed.connect(_open_settings)
+		_settings_button.pressed.connect(_on_settings_pressed)
 	if _generate_all_btn:
-		_generate_all_btn.pressed.connect(_generate_all_assets)
+		_generate_all_btn.pressed.connect(_on_generate_all_pressed)
 	if _run_world_btn:
-		_run_world_btn.pressed.connect(_run_world)
+		_run_world_btn.pressed.connect(_on_run_world_pressed)
+
+
+func _apply_settings() -> void:
+	_chat_handler.set_api_key(_settings_manager.api_key)
+	_chat_handler.set_model(_settings_manager.ai_model)
+	_asset_generator.set_replicate_key(_settings_manager.replicate_key)
 
 
 func _find(node_name: String) -> Node:
 	return find_child(node_name, true, false)
 
 
-# ==================== CHAT ====================
+# ==================== EVENT HANDLERS ====================
 
 func _on_send_pressed() -> void:
 	if not _prompt_input:
@@ -125,320 +150,109 @@ func _on_send_pressed() -> void:
 	if text.is_empty():
 		return
 
-	if _is_processing:
-		_sys("Still processing...", Color.YELLOW)
-		return
-
 	_prompt_input.text = ""
-	_msg(text, true)
-
-	# Check for world generation keywords
-	if _is_world_request(text):
-		_handle_world_request(text)
-		return
-
-	# Regular AI chat
-	if _api_key.is_empty():
-		_sys("Set API key in Settings first!", Color.RED)
-		return
-
-	_call_ai(text)
+	_send_button.disabled = true
+	_chat_handler.send_message(text, _world_builder.get_pending_world())
 
 
-func _is_world_request(text: String) -> bool:
-	var lower := text.to_lower()
-	var gen_words := ["create", "generate", "make", "build", "want", "need", "give"]
-	var world_words := ["world", "map", "terrain", "level", "land", "scene"]
-	var terrain_words := ["forest", "beach", "ocean", "desert", "snow", "water", "sand", "grass", "river", "lake", "island", "mountain"]
-
-	var has_gen := false
-	var has_world := false
-	var has_terrain := false
-
-	for w in gen_words:
-		if w in lower:
-			has_gen = true
-			break
-
-	for w in world_words:
-		if w in lower:
-			has_world = true
-			break
-
-	for w in terrain_words:
-		if w in lower:
-			has_terrain = true
-			break
-
-	# Trigger if: (gen + world) OR (gen + terrain) OR (just multiple terrains mentioned)
-	if has_gen and has_world:
-		return true
-	if has_gen and has_terrain:
-		return true
-	# If user mentions 2+ terrain types, assume they want a world
-	var terrain_count := 0
-	for w in terrain_words:
-		if w in lower:
-			terrain_count += 1
-	if terrain_count >= 2:
-		return true
-
-	return false
+func _on_clear_pressed() -> void:
+	_chat_handler.clear()
+	_chat_handler.show_welcome()
 
 
-func _handle_world_request(text: String) -> void:
-	_sys("Analyzing world request...", Color.CYAN)
+func _on_settings_pressed() -> void:
+	_settings_manager.open_dialog()
 
-	# Clear old assets
-	if _asset_manager:
-		_asset_manager.clear()
 
-	# Parse what terrains/objects are mentioned
-	var lower := text.to_lower()
+func _on_generate_all_pressed() -> void:
+	var started := _asset_generator.generate_all()
+	if started > 0:
+		_chat_handler.sys("Started " + str(started) + " parallel generations", Color.CYAN)
+	else:
+		_chat_handler.sys("All assets already generated!", Color.GREEN)
 
-	# Determine world name and theme from request
-	var world_name := _extract_world_name(lower)
-	var theme := _determine_theme(lower)
 
-	# Detect terrain types - order matters for transitions!
-	var terrains: Array[String] = []
+func _on_run_world_pressed() -> void:
+	_run_world()
 
-	# Beach/ocean implies water + sand
-	if "beach" in lower or "ocean" in lower or "island" in lower or "tropical" in lower:
-		if "water" not in terrains:
-			terrains.append("water")
-		if "sand" not in terrains:
-			terrains.append("sand")
 
-	# Explicit water
-	if "water" in lower or "sea" in lower or "lake" in lower or "river" in lower:
-		if "water" not in terrains:
-			terrains.append("water")
+func _on_settings_saved(api_key: String, replicate_key: String, ai_model: String) -> void:
+	_apply_settings()
+	_chat_handler.sys("Settings saved! Using " + _settings_manager.get_model_display_name(), Color.GREEN)
 
-	# Explicit sand/desert
-	if "sand" in lower or "desert" in lower or "dune" in lower:
-		if "sand" not in terrains:
-			terrains.append("sand")
 
-	# Grass/plains
-	if "grass" in lower or "plain" in lower or "meadow" in lower or "field" in lower:
-		if "grass" not in terrains:
-			terrains.append("grass")
+func _on_ai_decision(decision: Dictionary) -> void:
+	_send_button.disabled = false
+	_world_builder.execute_decision(decision)
 
-	# Forest (from trees keyword too)
-	if "forest" in lower or "tree" in lower or "wood" in lower or "jungle" in lower:
-		if "forest" not in terrains:
-			terrains.append("forest")
+	# Handle special actions that need UI changes
+	var action: String = decision.get("action", "")
+	if action == "finalize_world":
+		if _tab_container:
+			_tab_container.current_tab = 1
+		_refresh_assets_tab()
 
-	# Snow/ice
-	if "snow" in lower or "ice" in lower or "frozen" in lower or "winter" in lower:
-		if "snow" not in terrains:
-			terrains.append("snow")
 
-	# Default if nothing detected
-	if terrains.is_empty():
-		terrains = ["water", "sand", "grass"]
+func _on_mechanic_generated(response: String, description: String) -> void:
+	_send_button.disabled = false
+	var result := _world_builder.validate_and_save_mechanic(response, description)
 
-	# Add terrains to manifest
-	for t in terrains:
-		var prompt := _get_terrain_prompt(t)
-		_asset_manager.add_terrain(t, prompt)
+	if result.success:
+		_chat_handler.sys("Mechanic saved: " + result.path, Color.GREEN)
+		var warnings: Array = result.get("warnings", [])
+		for w in warnings:
+			_chat_handler.sys("Warning line %d: %s" % [w.line, w.message], Color.YELLOW)
 
-	# Add transitions between adjacent terrains
-	for i in range(terrains.size()):
-		var next_i := (i + 1) % terrains.size()
-		var from_t := terrains[i]
-		var to_t := terrains[next_i]
-		var prompt := from_t + " to " + to_t + " transition, shoreline edge"
-		_asset_manager.add_transition(from_t, to_t, prompt)
+		var editor := _get_editor_interface()
+		if editor:
+			editor.get_resource_filesystem().scan()
+	else:
+		_chat_handler.sys("Failed: " + result.error, Color.RED)
 
-	# Detect objects
-	if "tree" in lower or "forest" in lower or "palm" in lower:
-		var tree_prompt := "pixel art tree"
-		if "palm" in lower:
-			tree_prompt = "palm tree, tropical"
-		elif "pine" in lower or "snow" in lower:
-			tree_prompt = "pine tree, evergreen"
-		_asset_manager.add_object("tree", tree_prompt, 3)
 
-	if "rock" in lower or "stone" in lower or "boulder" in lower:
-		_asset_manager.add_object("rock", "rock boulder, natural stone", 2)
-
-	if "bush" in lower or "plant" in lower or "flower" in lower:
-		_asset_manager.add_object("plant", "bush flower plant, vegetation", 2)
-
-	# Detect structures
-	if "house" in lower or "cabin" in lower or "hut" in lower or "building" in lower or "village" in lower:
-		_asset_manager.add_structure("house", "small house cottage cabin", 2)
-
-	if "tower" in lower or "castle" in lower or "fort" in lower:
-		_asset_manager.add_structure("tower", "stone tower fortress", 1)
-
-	# CREATE THE WORLD FOLDER AND SCENE
-	_create_world_folder(world_name, theme, terrains)
-
-	# Show summary
-	var pending: int = _asset_manager.get_pending_count()
-	_msg("Created world: **" + world_name + "**\nTheme: " + theme + "\nTerrains: " + ", ".join(terrains) + "\n\n**" + str(pending) + " assets needed.** Generate them in Assets tab, then click 'Run World'!", false)
-
-	# Switch to assets tab
+func _on_world_created(path: String) -> void:
 	if _tab_container:
 		_tab_container.current_tab = 1
-
 	_refresh_assets_tab()
 
 
-func _extract_world_name(text: String) -> String:
-	# Extract a name from the request
-	var words := text.split(" ")
-	var name_parts: Array[String] = []
-
-	for word in words:
-		if word in ["create", "generate", "make", "build", "a", "an", "the", "world", "map", "with", "and", "some"]:
-			continue
-		if word.length() > 2:
-			name_parts.append(word)
-		if name_parts.size() >= 2:
-			break
-
-	if name_parts.is_empty():
-		return "world_" + str(randi() % 10000)
-
-	return "_".join(name_parts)
+func _on_action_executed(action: String, params: Dictionary) -> void:
+	match action:
+		"run_game":
+			_run_world()
+		"generate_mechanic":
+			var description: String = params.get("description", "")
+			if not description.is_empty():
+				_chat_handler.sys("Generating mechanic: " + description, Color.CYAN)
+				_chat_handler.call_ai_for_mechanic(description)
+		"add_object", "add_character":
+			_refresh_assets_tab()
 
 
-func _determine_theme(text: String) -> String:
-	if "beach" in text or "ocean" in text or "tropical" in text:
-		return "beach"
-	if "forest" in text or "wood" in text:
-		return "forest"
-	if "desert" in text or "sand" in text:
-		return "desert"
-	if "snow" in text or "ice" in text or "frozen" in text:
-		return "snow"
-	if "plain" in text or "grass" in text or "meadow" in text:
-		return "plains"
-	return "plains"
+func _on_status_message(text: String, color: Color) -> void:
+	_chat_handler.sys(text, color)
 
 
-func _create_world_folder(world_name: String, theme: String, terrains: Array[String]) -> void:
-	var folder_path := "res://game/" + world_name + "/"
-	var scene_path := folder_path + "world.tscn"
+func _on_gen_status(status: String) -> void:
+	if _asset_status:
+		_asset_status.text = status
 
-	# Create folder
-	var dir := DirAccess.open("res://")
-	if dir:
-		var rel_folder := "game/" + world_name
-		if not dir.dir_exists(rel_folder):
-			dir.make_dir_recursive(rel_folder)
 
-	# Create world scene file
-	var scene_content := _generate_world_scene(theme)
-
-	var abs_path := ProjectSettings.globalize_path(scene_path)
-	var file := FileAccess.open(abs_path, FileAccess.WRITE)
-	if file:
-		file.store_string(scene_content)
-		file.close()
-		_sys("Created: " + scene_path, Color.GREEN)
-	else:
-		_sys("Failed to create world scene!", Color.RED)
-		return
-
-	_current_world_path = scene_path
-
-	# Refresh filesystem
+func _on_asset_saved(file_path: String) -> void:
+	_chat_handler.sys("Saved: " + file_path, Color.GREEN)
 	var editor := _get_editor_interface()
 	if editor:
 		editor.get_resource_filesystem().scan()
 
 
-func _generate_world_scene(theme: String) -> String:
-	return """[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://addons/ai_assistant/world/world_runner.gd" id="1"]
-
-[node name="World" type="Node2D"]
-script = ExtResource("1")
-world_width = 128
-world_height = 128
-world_seed = 0
-tile_size = 32
-theme = \"""" + theme + """\"
-
-[node name="UI" type="CanvasLayer" parent="."]
-
-[node name="Instructions" type="Label" parent="UI"]
-offset_left = 10.0
-offset_top = 10.0
-offset_right = 400.0
-offset_bottom = 80.0
-text = "WASD - Move | R - New World | ESC - Quit"
-
-[node name="SeedLabel" type="Label" parent="UI"]
-offset_left = 10.0
-offset_top = 40.0
-offset_right = 300.0
-offset_bottom = 70.0
-text = "Seed: -"
-"""
-
-
-func _get_terrain_prompt(terrain: String) -> String:
-	match terrain:
-		"water":
-			return "blue ocean water, waves, deep sea"
-		"sand":
-			return "beach sand, golden yellow, sandy"
-		"grass":
-			return "green grass, meadow, lush"
-		"forest":
-			return "forest floor, dirt, leaves, undergrowth"
-		"snow":
-			return "white snow, ice, frozen ground"
-		_:
-			return terrain + " terrain"
-
-
-func _msg(text: String, is_user: bool) -> RichTextLabel:
-	if not _chat_container:
-		return null
-
-	var panel := PanelContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var style := StyleBoxFlat.new()
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
-	style.bg_color = Color(0.2, 0.4, 0.7, 0.5) if is_user else Color(0.2, 0.5, 0.3, 0.5)
-	panel.add_theme_stylebox_override("panel", style)
-
-	var rtl := RichTextLabel.new()
-	rtl.bbcode_enabled = true
-	rtl.fit_content = true
-	rtl.scroll_active = false
-	rtl.selection_enabled = true
-	rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rtl.text = ("[b]You:[/b] " if is_user else "[b]AI:[/b] ") + text
-	panel.add_child(rtl)
-
-	_chat_container.add_child(panel)
-	_scroll_chat()
-	return rtl
-
-
-func _sys(text: String, color: Color = Color.ORANGE) -> void:
-	if not _chat_container:
-		return
-	var lbl := Label.new()
-	lbl.text = "> " + text
-	lbl.add_theme_color_override("font_color", color)
-	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_chat_container.add_child(lbl)
-	_scroll_chat()
+func _on_gen_error(error: String) -> void:
+	_chat_handler.sys("Generation error: " + error, Color.RED)
+	if "401" in error or "Unauthorized" in error:
+		_chat_handler.sys("Check your Replicate API key in Settings", Color.YELLOW)
+	elif "422" in error:
+		_chat_handler.sys("Invalid request - model may have changed", Color.YELLOW)
+	elif "No Replicate API key" in error:
+		_chat_handler.sys("Go to Settings (gear icon) and enter your Replicate API key", Color.YELLOW)
 
 
 func _scroll_chat() -> void:
@@ -447,66 +261,20 @@ func _scroll_chat() -> void:
 		_chat_scroll.scroll_vertical = 99999
 
 
-func _clear_chat() -> void:
-	if _chat_container:
-		for child in _chat_container.get_children():
-			child.queue_free()
-
-
-# ==================== AI STREAMING ====================
-
-func _call_ai(prompt: String) -> void:
-	_is_processing = true
-	if _send_button:
-		_send_button.disabled = true
-
-	_stream_rtl = _msg("", false)
-	_stream_content = ""
-
-	var system_prompt := "You are a helpful Godot game development assistant. Help the user create games. When they describe a world, identify what terrain types, objects, and structures they need."
-
-	var messages := [{"role": "user", "content": prompt}]
-
-	if _ai_stream:
-		_ai_stream.start_stream(_api_key, "anthropic", _ai_model, messages, system_prompt)
-
-
-func _on_stream_chunk(text: String) -> void:
-	_stream_content += text
-	if _stream_rtl:
-		_stream_rtl.text = "[b]AI:[/b] " + _stream_content
-
-
-func _on_stream_finished(full_response: String) -> void:
-	_is_processing = false
-	if _send_button:
-		_send_button.disabled = false
-
-
-func _on_stream_error(error: String) -> void:
-	_sys("Error: " + error, Color.RED)
-	_is_processing = false
-	if _send_button:
-		_send_button.disabled = false
-
-
 # ==================== ASSETS TAB ====================
 
 func _refresh_assets_tab() -> void:
 	if not _asset_container or not _asset_manager:
 		return
 
-	# Clear existing
 	for child in _asset_container.get_children():
 		child.queue_free()
 
-	# Add sections
 	_add_asset_section("Terrain", _asset_manager.get_terrains(), "terrain")
 	_add_asset_section("Transitions", _asset_manager.get_transitions(), "transition")
 	_add_asset_section("Objects", _asset_manager.get_objects(), "object")
 	_add_asset_section("Structures", _asset_manager.get_structures(), "structure")
 
-	# Update status
 	var pending: int = _asset_manager.get_pending_count()
 	if _asset_status:
 		if pending > 0:
@@ -522,19 +290,19 @@ func _add_asset_section(title: String, assets: Dictionary, asset_type: String) -
 	if assets.is_empty():
 		return
 
-	# Section header
 	var header := Label.new()
-	header.text = title
+	if asset_type == "terrain":
+		header.text = title + " (extracted from transitions)"
+	else:
+		header.text = title
 	header.add_theme_font_size_override("font_size", 14)
 	header.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	_asset_container.add_child(header)
 
-	# Asset items
 	for key in assets:
 		var data: Dictionary = assets[key]
 		_add_asset_item(key, data, asset_type)
 
-	# Spacer
 	var spacer := Control.new()
 	spacer.custom_minimum_size.y = 10
 	_asset_container.add_child(spacer)
@@ -544,241 +312,135 @@ func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void
 	var hbox := HBoxContainer.new()
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	# Status icon
-	var status := Label.new()
 	var is_done := false
-
 	if asset_type in ["terrain", "transition"]:
 		is_done = data.get("generated", false)
 	else:
 		is_done = data.get("generated", 0) >= data.get("needed", 1)
 
-	status.text = "[OK]" if is_done else "[  ]"
-	status.add_theme_color_override("font_color", Color.GREEN if is_done else Color.GRAY)
+	# Thumbnail
+	var thumb_container := Panel.new()
+	thumb_container.custom_minimum_size = Vector2(32, 32)
+	var thumb_style := StyleBoxFlat.new()
+	thumb_style.bg_color = Color(0.15, 0.15, 0.15)
+	thumb_style.set_corner_radius_all(4)
+	thumb_container.add_theme_stylebox_override("panel", thumb_style)
+
+	var file_path: String = data.get("file", "")
+	if file_path.is_empty() and asset_type in ["object", "structure"]:
+		var folder: String = data.get("folder", "")
+		if not folder.is_empty():
+			var gen_count: int = data.get("generated", 0)
+			if gen_count > 0:
+				file_path = folder + "/" + name + "_01.png"
+
+	if is_done and not file_path.is_empty():
+		var full_path := "res://assets/" + file_path
+		if ResourceLoader.exists(full_path):
+			var tex := load(full_path) as Texture2D
+			if tex:
+				var tex_rect := TextureRect.new()
+				tex_rect.texture = tex
+				tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				tex_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+				tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+				thumb_container.add_child(tex_rect)
+
+	hbox.add_child(thumb_container)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size.x = 8
+	hbox.add_child(spacer)
+
+	# Name and prompt info
+	var info_vbox := VBoxContainer.new()
+	info_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var name_lbl := Label.new()
+	name_lbl.text = name.capitalize()
+	info_vbox.add_child(name_lbl)
+
+	var prompt_text: String = data.get("prompt", "")
+	if not prompt_text.is_empty():
+		var prompt_lbl := Label.new()
+		prompt_lbl.text = prompt_text.left(40) + ("..." if prompt_text.length() > 40 else "")
+		prompt_lbl.add_theme_font_size_override("font_size", 10)
+		prompt_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		info_vbox.add_child(prompt_lbl)
+
+	hbox.add_child(info_vbox)
+
+	# Status indicator
+	var status := Label.new()
+	if asset_type in ["object", "structure"]:
+		var gen_count: int = data.get("generated", 0)
+		var needed: int = data.get("needed", 1)
+		status.text = str(gen_count) + "/" + str(needed)
+		status.add_theme_color_override("font_color", Color.GREEN if is_done else Color.YELLOW)
+	else:
+		status.text = "OK" if is_done else ""
+		status.add_theme_color_override("font_color", Color.GREEN)
 	status.custom_minimum_size.x = 40
 	hbox.add_child(status)
 
-	# Name
-	var name_lbl := Label.new()
-	name_lbl.text = name.capitalize()
-	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(name_lbl)
-
-	# Generate button
-	if not is_done:
+	# Buttons
+	if asset_type == "terrain":
+		if not is_done:
+			var lbl := Label.new()
+			lbl.text = "(auto)"
+			lbl.add_theme_font_size_override("font_size", 10)
+			lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+			hbox.add_child(lbl)
+	elif not is_done:
 		var btn := Button.new()
 		btn.text = "Generate"
 		btn.pressed.connect(_on_generate_asset.bind(name, data, asset_type, btn))
 		hbox.add_child(btn)
+	else:
+		if asset_type != "terrain":
+			var regen_btn := Button.new()
+			regen_btn.text = "Regen"
+			regen_btn.tooltip_text = "Regenerate this asset"
+			regen_btn.pressed.connect(_on_regenerate_asset.bind(name, data, asset_type, regen_btn))
+			hbox.add_child(regen_btn)
 
 	_asset_container.add_child(hbox)
 
 
 func _on_generate_asset(name: String, data: Dictionary, asset_type: String, btn: Button) -> void:
-	if not _replicate_client:
-		_sys("Replicate client not loaded", Color.RED)
-		return
-
-	if _replicate_key.is_empty():
-		_sys("Set Replicate API key in Settings!", Color.RED)
-		return
-
 	btn.disabled = true
 	btn.text = "..."
-
-	_replicate_client.setup(_replicate_key, self)
-
-	var prompt: String = data.get("prompt", name)
-	var tile_size: int = _asset_manager.get_tile_size() if _asset_manager else 32
-
-	match asset_type:
-		"terrain":
-			_replicate_client.generate_terrain(name, prompt, tile_size)
-		"transition":
-			var from_t: String = data.get("from", "")
-			var to_t: String = data.get("to", "")
-			_replicate_client.generate_transition(from_t, to_t, prompt, tile_size)
-		"object":
-			var idx: int = data.get("generated", 0) + 1
-			_replicate_client.generate_object(name, prompt, tile_size, idx)
-		"structure":
-			var idx: int = data.get("generated", 0) + 1
-			_replicate_client.generate_structure(name, prompt, tile_size, idx)
+	if not _asset_generator.generate_single(name, data, asset_type):
+		btn.disabled = false
+		btn.text = "Generate"
 
 
-func _generate_all_assets() -> void:
-	_sys("Generate All not implemented yet - click individual buttons", Color.YELLOW)
+func _on_regenerate_asset(name: String, data: Dictionary, asset_type: String, btn: Button) -> void:
+	btn.disabled = true
+	btn.text = "..."
+	if not _asset_generator.regenerate(name, data, asset_type):
+		btn.disabled = false
+		btn.text = "Regen"
 
+
+# ==================== WORLD RUNNER ====================
 
 func _run_world() -> void:
 	var editor := _get_editor_interface()
 	if not editor:
-		_sys("Cannot run - editor interface not available", Color.RED)
+		_chat_handler.sys("Cannot run - editor interface not available", Color.RED)
 		return
 
-	# Use current world path, or fallback to default
-	var scene_path := _current_world_path
+	var scene_path := _world_builder.get_current_world_path()
 	if scene_path.is_empty():
 		scene_path = "res://game/world.tscn"
 
 	if not ResourceLoader.exists(scene_path):
-		_sys("World scene not found at " + scene_path + "\nCreate a world first using chat!", Color.RED)
+		_chat_handler.sys("World scene not found at " + scene_path + "\nCreate a world first using chat!", Color.RED)
 		return
 
-	_sys("Launching: " + scene_path, Color.CYAN)
+	_chat_handler.sys("Launching: " + scene_path, Color.CYAN)
 	editor.play_custom_scene(scene_path)
-
-
-func _on_gen_progress(status: String) -> void:
-	if _asset_status:
-		_asset_status.text = status
-
-
-func _on_gen_completed(image_data: PackedByteArray, asset_info: Dictionary) -> void:
-	var asset_type: String = asset_info.get("type", "")
-	var name: String = asset_info.get("name", "")
-	var file_path: String = asset_info.get("file", "")
-
-	if file_path.is_empty():
-		_sys("No file path for asset", Color.RED)
-		return
-
-	# Ensure folder exists
-	if _asset_manager:
-		_asset_manager.ensure_asset_folder(file_path)
-
-	# Save file
-	var full_path := "res://assets/" + file_path
-	var abs_path := ProjectSettings.globalize_path(full_path)
-
-	var file := FileAccess.open(abs_path, FileAccess.WRITE)
-	if not file:
-		_sys("Failed to save: " + file_path, Color.RED)
-		return
-
-	file.store_buffer(image_data)
-	file.close()
-
-	# Update manifest
-	if _asset_manager:
-		match asset_type:
-			"terrain":
-				_asset_manager.mark_terrain_generated(name)
-			"transition":
-				var from_t: String = asset_info.get("from", "")
-				var to_t: String = asset_info.get("to", "")
-				_asset_manager.mark_transition_generated(from_t, to_t)
-			"object":
-				_asset_manager.mark_object_generated(name)
-			"structure":
-				_asset_manager.mark_structure_generated(name)
-
-	_sys("Saved: " + file_path, Color.GREEN)
-
-	# Refresh Godot filesystem
-	var editor := _get_editor_interface()
-	if editor:
-		editor.get_resource_filesystem().scan()
-
-	_refresh_assets_tab()
-
-
-func _on_gen_error(error: String) -> void:
-	_sys("Generation error: " + error, Color.RED)
-	_refresh_assets_tab()
-
-
-# ==================== SETTINGS ====================
-
-func _open_settings() -> void:
-	if _settings_dialog and is_instance_valid(_settings_dialog):
-		_settings_dialog.popup_centered()
-		return
-
-	_settings_dialog = Window.new()
-	_settings_dialog.title = "AI Assistant Settings"
-	_settings_dialog.size = Vector2i(400, 350)
-	_settings_dialog.close_requested.connect(func(): _settings_dialog.hide())
-
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 20)
-	margin.add_theme_constant_override("margin_right", 20)
-	margin.add_theme_constant_override("margin_top", 20)
-	margin.add_theme_constant_override("margin_bottom", 20)
-	_settings_dialog.add_child(margin)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
-	margin.add_child(vbox)
-
-	# AI API Key
-	vbox.add_child(_make_label("Claude API Key:"))
-	var key_input := LineEdit.new()
-	key_input.secret = true
-	key_input.text = _api_key
-	key_input.placeholder_text = "sk-ant-..."
-	vbox.add_child(key_input)
-
-	# AI Model Selection
-	vbox.add_child(_make_label("AI Model:"))
-	var model_select := OptionButton.new()
-	var idx := 0
-	var selected_idx := 0
-	for model_name in AI_MODELS:
-		model_select.add_item(model_name)
-		if AI_MODELS[model_name] == _ai_model:
-			selected_idx = idx
-		idx += 1
-	model_select.selected = selected_idx
-	vbox.add_child(model_select)
-
-	# Replicate API Key
-	vbox.add_child(_make_label("Replicate API Key (for assets):"))
-	var rep_input := LineEdit.new()
-	rep_input.secret = true
-	rep_input.text = _replicate_key
-	rep_input.placeholder_text = "r8_..."
-	vbox.add_child(rep_input)
-
-	# Save button
-	var save_btn := Button.new()
-	save_btn.text = "Save"
-	save_btn.pressed.connect(func():
-		_api_key = key_input.text
-		_replicate_key = rep_input.text
-		var selected_name: String = model_select.get_item_text(model_select.selected)
-		_ai_model = AI_MODELS.get(selected_name, "claude-sonnet-4-5-20250929")
-		_save_settings()
-		_settings_dialog.hide()
-		_sys("Settings saved! Using " + selected_name, Color.GREEN)
-	)
-	vbox.add_child(save_btn)
-
-	add_child(_settings_dialog)
-	_settings_dialog.popup_centered()
-
-
-func _make_label(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	return lbl
-
-
-func _load_settings() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load("user://ai_assistant_settings.cfg") == OK:
-		_api_key = cfg.get_value("settings", "api_key", "")
-		_replicate_key = cfg.get_value("settings", "replicate_key", "")
-		_ai_model = cfg.get_value("settings", "ai_model", "claude-sonnet-4-5-20250929")
-
-
-func _save_settings() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("settings", "api_key", _api_key)
-	cfg.set_value("settings", "replicate_key", _replicate_key)
-	cfg.set_value("settings", "ai_model", _ai_model)
-	cfg.save("user://ai_assistant_settings.cfg")
 
 
 # ==================== HELPERS ====================

@@ -47,7 +47,7 @@ func _create_empty_manifest() -> Dictionary:
 	return {
 		"version": "1.0",
 		"style": "retro pixel art",
-		"tile_size": 32,
+		"tile_size": 16,
 		"terrain": {},
 		"transitions": {},
 		"objects": {},
@@ -150,6 +150,39 @@ func mark_structure_generated(name: String) -> void:
 		manifest_changed.emit()
 
 
+## Reset terrain for regeneration
+func reset_terrain(name: String) -> void:
+	if _manifest.terrain.has(name):
+		_manifest.terrain[name].generated = false
+		save_manifest()
+		manifest_changed.emit()
+
+
+## Reset transition for regeneration
+func reset_transition(from_terrain: String, to_terrain: String) -> void:
+	var key := from_terrain + "_" + to_terrain
+	if _manifest.transitions.has(key):
+		_manifest.transitions[key].generated = false
+		save_manifest()
+		manifest_changed.emit()
+
+
+## Reset object for regeneration (reset count to 0)
+func reset_object(name: String) -> void:
+	if _manifest.objects.has(name):
+		_manifest.objects[name].generated = 0
+		save_manifest()
+		manifest_changed.emit()
+
+
+## Reset structure for regeneration (reset count to 0)
+func reset_structure(name: String) -> void:
+	if _manifest.structures.has(name):
+		_manifest.structures[name].generated = 0
+		save_manifest()
+		manifest_changed.emit()
+
+
 ## Get all terrains
 func get_terrains() -> Dictionary:
 	return _manifest.terrain.duplicate()
@@ -188,9 +221,11 @@ func set_style(style: String) -> void:
 
 ## Check if any assets are needed
 func has_pending_assets() -> bool:
+	# Check terrains first (must be generated before transitions)
 	for t in _manifest.terrain.values():
 		if not t.generated:
 			return true
+	# Then check transitions
 	for t in _manifest.transitions.values():
 		if not t.generated:
 			return true
@@ -206,9 +241,11 @@ func has_pending_assets() -> bool:
 ## Get count of pending assets
 func get_pending_count() -> int:
 	var count := 0
+	# Count terrains (generated first)
 	for t in _manifest.terrain.values():
 		if not t.generated:
 			count += 1
+	# Then transitions
 	for t in _manifest.transitions.values():
 		if not t.generated:
 			count += 1

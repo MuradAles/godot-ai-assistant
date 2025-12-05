@@ -27,28 +27,40 @@ func start_stream(api_key: String, p_provider: String, model: String, messages: 
 	http_client = HTTPClient.new()
 
 	var host := ANTHROPIC_URL if provider == "anthropic" else OPENAI_URL
+	print("[AI] Connecting to " + host + "...")
 	var err := http_client.connect_to_host(host, 443, TLSOptions.client())
 
 	if err != OK:
+		print("[AI] Connect error: " + error_string(err))
 		stream_error.emit("Failed to connect: " + error_string(err))
 		return
 
 	# Wait for connection (with timeout)
-	var timeout := 10.0
+	var timeout := 15.0
 	var elapsed := 0.0
 	while http_client.get_status() == HTTPClient.STATUS_CONNECTING or http_client.get_status() == HTTPClient.STATUS_RESOLVING:
 		http_client.poll()
 		await Engine.get_main_loop().process_frame
 		elapsed += 0.016
 		if elapsed > timeout:
-			stream_error.emit("Connection timeout")
+			print("[AI] Connection timeout after " + str(timeout) + "s")
+			stream_error.emit("Connection timeout - check your internet connection")
 			cleanup()
 			return
 
-	if http_client.get_status() != HTTPClient.STATUS_CONNECTED:
-		stream_error.emit("Failed to connect: status " + str(http_client.get_status()))
+	var status := http_client.get_status()
+	if status != HTTPClient.STATUS_CONNECTED:
+		print("[AI] Failed to connect, status: " + str(status))
+		var status_msg := "Unknown (status " + str(status) + ")"
+		match status:
+			HTTPClient.STATUS_CANT_CONNECT: status_msg = "Cannot connect"
+			HTTPClient.STATUS_CANT_RESOLVE: status_msg = "Cannot resolve hostname"
+			HTTPClient.STATUS_CONNECTION_ERROR: status_msg = "Connection error"
+		stream_error.emit("Failed to connect: " + status_msg)
 		cleanup()
 		return
+
+	print("[AI] Connected, sending request...")
 
 	# Build request
 	var headers: PackedStringArray
@@ -97,6 +109,8 @@ func start_stream(api_key: String, p_provider: String, model: String, messages: 
 
 
 func _process_stream() -> void:
+	var response_checked := false
+
 	while is_streaming and http_client:
 		http_client.poll()
 		var status := http_client.get_status()
@@ -106,6 +120,25 @@ func _process_stream() -> void:
 			continue
 
 		if status == HTTPClient.STATUS_BODY:
+			# Check response code first time we get body
+			if not response_checked and http_client.has_response():
+				response_checked = true
+				var response_code := http_client.get_response_code()
+				print("[AI] Response code: " + str(response_code))
+				if response_code != 200:
+					var error_body := ""
+					while http_client.get_status() == HTTPClient.STATUS_BODY:
+						http_client.poll()
+						var chunk := http_client.read_response_body_chunk()
+						if chunk.size() > 0:
+							error_body += chunk.get_string_from_utf8()
+						else:
+							break
+						await Engine.get_main_loop().process_frame
+					print("[AI] Error response: " + error_body.left(500))
+					stream_error.emit("API error " + str(response_code) + ": " + error_body.left(200))
+					break
+
 			if http_client.has_response():
 				var chunk := http_client.read_response_body_chunk()
 				if chunk.size() > 0:
@@ -119,8 +152,25 @@ func _process_stream() -> void:
 			# Done
 			break
 
-		if status == HTTPClient.STATUS_CONNECTION_ERROR or status == HTTPClient.STATUS_CANT_CONNECT:
-			stream_error.emit("Connection error")
+		if status == HTTPClient.STATUS_CONNECTION_ERROR:
+			print("[AI] Connection error status")
+			stream_error.emit("Connection error - check your internet connection")
+			break
+
+		if status == HTTPClient.STATUS_CANT_CONNECT:
+			print("[AI] Can't connect status")
+			stream_error.emit("Cannot connect to API server")
+			break
+
+		if status == HTTPClient.STATUS_CANT_RESOLVE:
+			print("[AI] Can't resolve status")
+			stream_error.emit("Cannot resolve API hostname")
+			break
+
+		# Catch any other error states (disconnected, etc.)
+		if status != HTTPClient.STATUS_REQUESTING and status != HTTPClient.STATUS_BODY and status != HTTPClient.STATUS_CONNECTED:
+			print("[AI] Unexpected status: " + str(status))
+			stream_error.emit("Connection issue (status " + str(status) + ")")
 			break
 
 		await Engine.get_main_loop().process_frame

@@ -2,14 +2,16 @@ extends Node2D
 
 ## Runtime world display and player controller
 ## This script runs the generated world with optional AI-generated assets
+## Supports wang tile transitions between terrain types
 
 @export var world_width: int = 128
 @export var world_height: int = 128
 @export var world_seed: int = 0
-@export var tile_size: int = 32
+@export var tile_size: int = 16
 @export var theme: String = "plains"
 
 var terrain_layer: TileMapLayer
+var transition_layer: TileMapLayer  # Layer for transition tiles (above terrain)
 var structure_layer: TileMapLayer
 var object_sprites: Node2D  # For multi-tile structure sprites
 var player: CharacterBody2D
@@ -24,8 +26,12 @@ const MANIFEST_PATH := "res://assets/manifest.json"
 var _manifest_terrains: Array[String] = []
 
 # Asset cache
-var _terrain_textures: Dictionary = {}
-var _object_textures: Dictionary = {}
+var _terrain_textures: Dictionary = {}  # terrain_name -> Texture2D
+var _transition_textures: Dictionary = {}  # "from_to" -> Array[Texture2D] (20 wang tiles)
+var _object_textures: Dictionary = {}   # object_name -> Array[Texture2D] (multiple variants)
+
+# Wang tile parser
+var _wang_tiles: RefCounted = null
 
 # Noise for terrain distribution
 var _elevation_noise: FastNoiseLite
@@ -161,7 +167,7 @@ func _generate_structures(terrain_data: Array) -> Dictionary:
 			row.append(0)  # 0 = no structure
 		structures_grid.append(row)
 
-	# Place trees and rocks on appropriate terrain (not water)
+	# Place objects on appropriate terrain (not water)
 	for y in range(world_height):
 		for x in range(world_width):
 			var terrain_idx: int = terrain_data[y][x]
@@ -171,23 +177,71 @@ func _generate_structures(terrain_data: Array) -> Dictionary:
 			if terrain_name == "water":
 				continue
 
-			# Random chance to place tree or rock
-			if randf() < 0.02:  # 2% chance for tree
-				structure_objects.append({
-					"type": 5,  # TREE
-					"x": x,
-					"y": y,
-					"width": 1,
-					"height": 2
-				})
-			elif randf() < 0.01:  # 1% chance for rock
-				structure_objects.append({
-					"type": 6,  # ROCK
-					"x": x,
-					"y": y,
-					"width": 1,
-					"height": 1
-				})
+			var roll := randf()
+
+			# Choose object type based on terrain
+			if terrain_name == "sand":
+				# Desert/beach terrain - palm trees and rocks
+				if roll < 0.015:  # Palm trees on sand
+					structure_objects.append({
+						"type": 8,  # PALM_TREE
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 2
+					})
+				elif roll < 0.02:  # Rocks on sand
+					structure_objects.append({
+						"type": 6,  # ROCK
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 1
+					})
+			elif terrain_name == "forest":
+				# Forest terrain - regular trees and bushes
+				if roll < 0.04:  # More trees in forest
+					structure_objects.append({
+						"type": 5,  # TREE
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 2
+					})
+				elif roll < 0.06:  # Bushes in forest
+					structure_objects.append({
+						"type": 7,  # BUSH
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 1
+					})
+			else:
+				# Other terrain (grass, dirt, etc.)
+				if roll < 0.02:  # Trees
+					structure_objects.append({
+						"type": 5,  # TREE
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 2
+					})
+				elif roll < 0.025:  # Rocks
+					structure_objects.append({
+						"type": 6,  # ROCK
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 1
+					})
+				elif roll < 0.03:  # Bushes
+					structure_objects.append({
+						"type": 7,  # BUSH
+						"x": x,
+						"y": y,
+						"width": 1,
+						"height": 1
+					})
 
 	return {
 		"grid": structures_grid,
@@ -203,6 +257,13 @@ func _build_tilemap_from_manifest(terrain_data: Array, structures_data: Dictiona
 	terrain_layer.tile_set = tileset
 	add_child(terrain_layer)
 
+	# Transition layer sits between terrain and structures
+	transition_layer = TileMapLayer.new()
+	transition_layer.name = "Transitions"
+	transition_layer.tile_set = _create_transition_tileset()
+	transition_layer.z_index = 0  # Same level as terrain, rendered after
+	add_child(transition_layer)
+
 	structure_layer = TileMapLayer.new()
 	structure_layer.name = "Structures"
 	structure_layer.tile_set = tileset
@@ -214,11 +275,19 @@ func _build_tilemap_from_manifest(terrain_data: Array, structures_data: Dictiona
 	object_sprites.z_index = 2
 	add_child(object_sprites)
 
-	# Place terrain tiles
+	# First, identify which cells need transitions and which transitions are available
+	var transition_cells := _get_transition_cells(terrain_data)
+
+	# Place terrain tiles (skip cells that will have transitions)
 	for y in range(world_height):
 		for x in range(world_width):
-			var terrain_idx: int = terrain_data[y][x]
-			terrain_layer.set_cell(Vector2i(x, y), 0, Vector2i(terrain_idx, 0))
+			var cell_key := Vector2i(x, y)
+			if not transition_cells.has(cell_key):
+				var terrain_idx: int = terrain_data[y][x]
+				terrain_layer.set_cell(cell_key, 0, Vector2i(terrain_idx, 0))
+
+	# Place transition tiles where terrain types meet
+	_place_transition_tiles(terrain_data, transition_cells)
 
 	# Place structure sprites
 	var structure_objects: Array = structures_data.get("objects", [])
@@ -251,16 +320,35 @@ func _make_manifest_terrain_texture() -> ImageTexture:
 
 	for i in range(_manifest_terrains.size()):
 		var terrain_name: String = _manifest_terrains[i]
-		var color := _get_terrain_color_by_name(terrain_name)
 
-		# Fill with color and slight noise for texture
-		for py in range(tile_size):
-			for px in range(tile_size):
-				var c := color
-				c.r = clampf(c.r + randf_range(-0.03, 0.03), 0, 1)
-				c.g = clampf(c.g + randf_range(-0.03, 0.03), 0, 1)
-				c.b = clampf(c.b + randf_range(-0.03, 0.03), 0, 1)
-				img.set_pixel(i * tile_size + px, py, c)
+		# Check if we have a generated texture for this terrain
+		if _terrain_textures.has(terrain_name):
+			var loaded_tex: Texture2D = _terrain_textures[terrain_name]
+			var loaded_img: Image = loaded_tex.get_image()
+
+			# Resize if needed to match tile_size
+			if loaded_img.get_width() != tile_size or loaded_img.get_height() != tile_size:
+				loaded_img.resize(tile_size, tile_size, Image.INTERPOLATE_NEAREST)
+
+			# Copy the loaded terrain image into the atlas
+			for py in range(tile_size):
+				for px in range(tile_size):
+					var pixel_color := loaded_img.get_pixel(px, py)
+					img.set_pixel(i * tile_size + px, py, pixel_color)
+
+			print("[World] Using generated texture for terrain: ", terrain_name)
+		else:
+			# Fallback: colored placeholder
+			var color := _get_terrain_color_by_name(terrain_name)
+			for py in range(tile_size):
+				for px in range(tile_size):
+					var c := color
+					c.r = clampf(c.r + randf_range(-0.03, 0.03), 0, 1)
+					c.g = clampf(c.g + randf_range(-0.03, 0.03), 0, 1)
+					c.b = clampf(c.b + randf_range(-0.03, 0.03), 0, 1)
+					img.set_pixel(i * tile_size + px, py, c)
+
+			print("[World] Using placeholder for terrain: ", terrain_name)
 
 	return ImageTexture.create_from_image(img)
 
@@ -281,8 +369,272 @@ func _get_terrain_color_by_name(terrain_name: String) -> Color:
 			return Color(0.85, 0.7, 0.4)
 		"mountain", "rock":
 			return Color(0.5, 0.5, 0.5)
+		"dirt":
+			return Color(0.55, 0.4, 0.25)
 		_:
 			return Color(0.5, 0.5, 0.5)
+
+
+## Create tileset for transition tiles (wang tiles)
+## Each transition type gets 20 tiles in a 4x5 grid
+func _create_transition_tileset() -> TileSet:
+	var ts := TileSet.new()
+	ts.tile_size = Vector2i(tile_size, tile_size)
+
+	# Load transition tilesets from manifest
+	var manifest := _load_manifest_data()
+	var transitions: Dictionary = manifest.get("transitions", {})
+
+	var source_id := 0
+	for trans_key in transitions.keys():
+		var trans_data: Dictionary = transitions[trans_key]
+		var generated: bool = trans_data.get("generated", false)
+
+		if generated:
+			var file_path: String = trans_data.get("file", "")
+			var trans_path: String = ASSET_BASE + file_path
+			if ResourceLoader.exists(trans_path):
+				var trans_tex: Texture2D = load(trans_path)
+				if trans_tex:
+					# Parse the 4x5 wang tileset
+					var tiles := _parse_wang_tileset(trans_tex)
+					_transition_textures[trans_key] = tiles
+
+					# Create atlas source for this transition
+					var t_src := TileSetAtlasSource.new()
+					t_src.texture = trans_tex
+					t_src.texture_region_size = Vector2i(tile_size, tile_size)
+					ts.add_source(t_src, source_id)
+
+					# Create all 20 tiles in the 4x5 grid
+					for row in range(5):
+						for col in range(4):
+							t_src.create_tile(Vector2i(col, row))
+
+					print("[World] Loaded transition tileset: ", trans_key, " as source ", source_id)
+					source_id += 1
+
+	return ts
+
+
+## Parse a wang tileset image (64x80 for 16px tiles) into individual tiles
+func _parse_wang_tileset(tileset_texture: Texture2D) -> Array[Texture2D]:
+	var tiles: Array[Texture2D] = []
+	var img := tileset_texture.get_image()
+
+	var cols := 4
+	var rows := 5
+
+	for row in range(rows):
+		for col in range(cols):
+			var tile_img := Image.create(tile_size, tile_size, false, img.get_format())
+			var src_x := col * tile_size
+			var src_y := row * tile_size
+
+			for py in range(tile_size):
+				for px in range(tile_size):
+					if src_x + px < img.get_width() and src_y + py < img.get_height():
+						tile_img.set_pixel(px, py, img.get_pixel(src_x + px, src_y + py))
+
+			tiles.append(ImageTexture.create_from_image(tile_img))
+
+	return tiles
+
+
+## Get cells that need transition tiles and have available tilesets
+func _get_transition_cells(terrain_data: Array) -> Dictionary:
+	var cells: Dictionary = {}  # Vector2i -> transition info
+	var manifest := _load_manifest_data()
+	var transitions: Dictionary = manifest.get("transitions", {})
+
+	# Build available transitions set
+	var available_transitions: Dictionary = {}
+	for trans_key in transitions.keys():
+		var trans_data: Dictionary = transitions[trans_key]
+		if trans_data.get("generated", false):
+			available_transitions[trans_key] = true
+
+	# Find cells at terrain boundaries with available transitions
+	for y in range(world_height):
+		for x in range(world_width):
+			var current_idx: int = terrain_data[y][x]
+			var current_terrain: String = _manifest_terrains[current_idx] if current_idx < _manifest_terrains.size() else ""
+			var neighbors := _get_different_neighbors(terrain_data, x, y, current_idx)
+
+			if neighbors.size() > 0:
+				var neighbor_idx: int = neighbors[0]["terrain_idx"]
+				var neighbor_terrain: String = _manifest_terrains[neighbor_idx] if neighbor_idx < _manifest_terrains.size() else ""
+
+				var trans_key := current_terrain + "_" + neighbor_terrain
+				var reverse_key := neighbor_terrain + "_" + current_terrain
+
+				if available_transitions.has(trans_key) or available_transitions.has(reverse_key):
+					cells[Vector2i(x, y)] = {
+						"current": current_terrain,
+						"neighbor": neighbor_terrain,
+						"neighbors": neighbors
+					}
+
+	return cells
+
+
+## Place transition tiles where different terrains meet
+## Transition tiles REPLACE base terrain (not overlay)
+func _place_transition_tiles(terrain_data: Array, transition_cells: Dictionary) -> void:
+	var manifest := _load_manifest_data()
+	var transitions: Dictionary = manifest.get("transitions", {})
+
+	# Build a map of transition keys to source IDs
+	var transition_sources: Dictionary = {}
+	var source_id := 0
+	for trans_key in transitions.keys():
+		var trans_data: Dictionary = transitions[trans_key]
+		if trans_data.get("generated", false):
+			transition_sources[trans_key] = source_id
+			source_id += 1
+
+	# Place transition tiles
+	for cell_pos in transition_cells.keys():
+		var cell_info: Dictionary = transition_cells[cell_pos]
+		var current_terrain: String = cell_info["current"]
+		var neighbor_terrain: String = cell_info["neighbor"]
+		var neighbors: Array = cell_info["neighbors"]
+
+		# Try both directions for transition key
+		var trans_key := current_terrain + "_" + neighbor_terrain
+		var reverse_key := neighbor_terrain + "_" + current_terrain
+
+		var used_key := ""
+		var is_reverse := false
+
+		if transition_sources.has(trans_key):
+			used_key = trans_key
+		elif transition_sources.has(reverse_key):
+			used_key = reverse_key
+			is_reverse = true
+
+		if not used_key.is_empty():
+			var src_id: int = transition_sources[used_key]
+			var edge_mask := _calculate_edge_mask(neighbors, is_reverse)
+			var tile_coords := _edge_mask_to_tile_coords(edge_mask)
+
+			# Place in transition layer (which replaces terrain at this position)
+			transition_layer.set_cell(cell_pos, src_id, tile_coords)
+
+
+## Get list of neighbors with different terrain
+func _get_different_neighbors(terrain_data: Array, x: int, y: int, current_idx: int) -> Array:
+	var neighbors: Array = []
+
+	# Check 4 cardinal directions: top, right, bottom, left
+	var dirs := [
+		{"dx": 0, "dy": -1, "edge": "top"},
+		{"dx": 1, "dy": 0, "edge": "right"},
+		{"dx": 0, "dy": 1, "edge": "bottom"},
+		{"dx": -1, "dy": 0, "edge": "left"}
+	]
+
+	for dir in dirs:
+		var nx: int = x + dir["dx"]
+		var ny: int = y + dir["dy"]
+
+		if nx >= 0 and nx < world_width and ny >= 0 and ny < world_height:
+			var neighbor_idx: int = terrain_data[ny][nx]
+			if neighbor_idx != current_idx:
+				neighbors.append({
+					"edge": dir["edge"],
+					"terrain_idx": neighbor_idx,
+					"x": nx,
+					"y": ny
+				})
+
+	return neighbors
+
+
+## Calculate edge mask for wang tile selection
+## Returns a 4-bit mask: Top(8) Right(4) Bottom(2) Left(1)
+func _calculate_edge_mask(neighbors: Array, is_reverse: bool) -> int:
+	var mask := 0
+
+	for neighbor in neighbors:
+		var edge: String = neighbor["edge"]
+		match edge:
+			"top":
+				mask |= 8
+			"right":
+				mask |= 4
+			"bottom":
+				mask |= 2
+			"left":
+				mask |= 1
+
+	# If using reverse transition, invert the mask
+	if is_reverse:
+		mask = (~mask) & 0b1111
+
+	return mask
+
+
+## Convert edge mask to tile coordinates in the 4x5 wang tileset
+## rd-tile tileset_advanced layout (based on observation):
+## Row 0: Base terrain A variations
+## Row 1-3: Transition tiles with various edge combinations
+## Row 4: Base terrain B variations
+##
+## Edge mask: Top(8) Right(4) Bottom(2) Left(1) = which edges touch OTHER terrain
+func _edge_mask_to_tile_coords(edge_mask: int) -> Vector2i:
+	# rd-tile uses a blob/marching-squares style layout
+	# This mapping is approximate based on observed tileset output
+	# The tileset has 4 cols x 5 rows = 20 tiles
+
+	match edge_mask:
+		# No transition needed - use full terrain A (top-left)
+		0b0000:
+			return Vector2i(0, 0)
+
+		# Single edge transitions
+		0b1000:  # Top edge different
+			return Vector2i(1, 2)
+		0b0100:  # Right edge different
+			return Vector2i(2, 1)
+		0b0010:  # Bottom edge different
+			return Vector2i(1, 1)
+		0b0001:  # Left edge different
+			return Vector2i(0, 1)
+
+		# Corner transitions (two adjacent edges)
+		0b1100:  # Top + Right
+			return Vector2i(3, 2)
+		0b0110:  # Right + Bottom
+			return Vector2i(3, 1)
+		0b0011:  # Bottom + Left
+			return Vector2i(0, 2)
+		0b1001:  # Top + Left
+			return Vector2i(2, 2)
+
+		# Opposite edges (channel)
+		0b1010:  # Top + Bottom
+			return Vector2i(1, 3)
+		0b0101:  # Left + Right
+			return Vector2i(2, 3)
+
+		# Three edges (peninsula into other terrain)
+		0b1110:  # Top + Right + Bottom
+			return Vector2i(3, 3)
+		0b0111:  # Right + Bottom + Left
+			return Vector2i(0, 3)
+		0b1011:  # Top + Bottom + Left
+			return Vector2i(1, 4)
+		0b1101:  # Top + Right + Left
+			return Vector2i(2, 4)
+
+		# All edges different - use full terrain B (bottom-right area)
+		0b1111:
+			return Vector2i(3, 4)
+
+		# Default fallback
+		_:
+			return Vector2i(0, 0)
 
 
 func _place_structure_sprites_manifest(structure_objects: Array) -> void:
@@ -312,11 +664,15 @@ func _place_structure_sprites_manifest(structure_objects: Array) -> void:
 
 
 func _get_structure_texture_manifest(structure_type: int, w: int, h: int) -> Texture2D:
-	var type_names := {5: "tree", 6: "rock"}
+	var type_names := {5: "tree", 6: "rock", 7: "bush", 8: "palm_tree"}
 	var type_name: String = type_names.get(structure_type, "")
 
 	if type_name != "" and _object_textures.has(type_name):
-		return _object_textures[type_name]
+		var variants: Array = _object_textures[type_name]
+		if variants.size() > 0:
+			# Pick a random variant
+			var variant_idx := randi() % variants.size()
+			return variants[variant_idx]
 
 	# Fallback placeholder
 	return _make_placeholder_structure_manifest(structure_type, w, h)
@@ -452,6 +808,8 @@ func _find_spawn_on_terrain(terrain_data: Array) -> Vector2:
 func _clear() -> void:
 	if terrain_layer:
 		terrain_layer.queue_free()
+	if transition_layer:
+		transition_layer.queue_free()
 	if structure_layer:
 		structure_layer.queue_free()
 	if object_sprites:
@@ -459,6 +817,7 @@ func _clear() -> void:
 	if player:
 		player.queue_free()
 	_terrain_textures.clear()
+	_transition_textures.clear()
 	_object_textures.clear()
 	_manifest_terrains.clear()
 
@@ -563,44 +922,70 @@ func _make_structure_texture(gen) -> ImageTexture:
 
 
 func _load_assets() -> void:
-	# Try theme-specific folder first (assets/plains/terrain.png)
-	var theme_path := ASSET_BASE + theme.to_lower() + "/"
-	var terrain_path := theme_path + "terrain.png"
-	if ResourceLoader.exists(terrain_path):
-		_terrain_textures["tileset"] = load(terrain_path)
-		print("Loaded terrain tileset: ", terrain_path)
-	else:
-		# Fallback to manifest structure (assets/terrain/grass.png)
-		terrain_path = ASSET_BASE + "terrain/" + theme.to_lower() + ".png"
+	print("[World] Loading assets from manifest...")
+
+	# Load terrain textures from manifest - each terrain has its own PNG
+	for terrain_name in _manifest_terrains:
+		var terrain_path := ASSET_BASE + "terrain/" + terrain_name + ".png"
 		if ResourceLoader.exists(terrain_path):
-			_terrain_textures["tileset"] = load(terrain_path)
-			print("Loaded terrain tileset: ", terrain_path)
+			_terrain_textures[terrain_name] = load(terrain_path)
+			print("[World] Loaded terrain: ", terrain_path)
+		else:
+			print("[World] Terrain not found: ", terrain_path)
 
-	# Object textures - try multiple locations
-	var object_configs := {
-		"tree": ["objects/tree/tree_01.png", "tree_1.png"],
-		"rock": ["objects/rock/rock_01.png", "rock_1.png"],
-		"house": ["structures/house/house_01.png", "house_1.png"],
-		"tower": ["structures/tower/tower_01.png", "tower_1.png"],
-		"player": ["characters/player.png", "player.png"],
-		"npc": ["characters/npc_01.png", "npc_1.png"]
-	}
+	# Load object textures from manifest structure
+	# Objects are stored in objects/<name>/<name>_01.png, _02.png, etc.
+	var manifest := _load_manifest_data()
+	var objects_dict: Dictionary = manifest.get("objects", {})
 
-	for obj_type in object_configs:
-		var paths: Array = object_configs[obj_type]
-		for rel_path in paths:
-			# Try manifest structure first
-			var obj_path: String = ASSET_BASE + rel_path
+	for obj_name in objects_dict.keys():
+		var obj_data: Dictionary = objects_dict[obj_name]
+		var folder: String = obj_data.get("folder", "objects/" + obj_name)
+		var generated: int = obj_data.get("generated", 0)
+
+		# Load ALL generated variants
+		if generated > 0:
+			var variants: Array[Texture2D] = []
+			for i in range(1, generated + 1):
+				var idx_str: String = str(i).pad_zeros(2)
+				var obj_path: String = ASSET_BASE + folder + "/" + obj_name + "_" + idx_str + ".png"
+				if ResourceLoader.exists(obj_path):
+					variants.append(load(obj_path))
+					print("[World] Loaded object variant: ", obj_path)
+
+			if variants.size() > 0:
+				_object_textures[obj_name] = variants
+				print("[World] Loaded ", variants.size(), " variants for: ", obj_name)
+
+	# Also try common object names that might not be in manifest
+	var fallback_objects := ["tree", "rock", "bush", "palm_tree", "flower", "house", "tower"]
+	for obj_name in fallback_objects:
+		if _object_textures.has(obj_name):
+			continue
+		# Try to find any variants
+		var variants: Array[Texture2D] = []
+		for i in range(1, 10):  # Check up to 10 variants
+			var idx_str: String = str(i).pad_zeros(2)
+			var obj_path: String = ASSET_BASE + "objects/" + obj_name + "/" + obj_name + "_" + idx_str + ".png"
 			if ResourceLoader.exists(obj_path):
-				_object_textures[obj_type] = load(obj_path)
-				print("Loaded object: ", obj_path)
-				break
-			# Try theme folder
-			obj_path = theme_path + rel_path.get_file()
-			if ResourceLoader.exists(obj_path):
-				_object_textures[obj_type] = load(obj_path)
-				print("Loaded object: ", obj_path)
-				break
+				variants.append(load(obj_path))
+			else:
+				break  # Stop when we don't find one
+		if variants.size() > 0:
+			_object_textures[obj_name] = variants
+			print("[World] Loaded ", variants.size(), " fallback variants for: ", obj_name)
+
+
+func _load_manifest_data() -> Dictionary:
+	if not FileAccess.file_exists(MANIFEST_PATH):
+		return {}
+	var file := FileAccess.open(MANIFEST_PATH, FileAccess.READ)
+	if not file:
+		return {}
+	var json := JSON.new()
+	if json.parse(file.get_as_text()) != OK:
+		return {}
+	return json.data
 
 
 func _place_structure_sprites(structure_objects: Array, gen) -> void:
@@ -640,14 +1025,20 @@ func _get_structure_texture(structure_type: int, w: int, h: int, gen) -> Texture
 		2: "house",   # StructureType.HOUSE
 		3: "tower",   # StructureType.TOWER
 		5: "tree",    # StructureType.TREE
-		6: "rock"     # StructureType.ROCK
+		6: "rock",    # StructureType.ROCK
+		7: "bush",
+		8: "palm_tree"
 	}
 
 	var type_name: String = type_names.get(structure_type, "")
 
-	# Check if we have a generated asset
+	# Check if we have a generated asset (now an array of variants)
 	if type_name != "" and _object_textures.has(type_name):
-		return _object_textures[type_name]
+		var variants: Array = _object_textures[type_name]
+		if variants.size() > 0:
+			# Pick a random variant
+			var variant_idx := randi() % variants.size()
+			return variants[variant_idx]
 
 	# Fallback: create colored placeholder
 	return _make_placeholder_structure(structure_type, w, h, gen)
