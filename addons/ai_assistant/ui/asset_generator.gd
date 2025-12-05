@@ -42,11 +42,6 @@ func generate_single(name: String, data: Dictionary, asset_type: String) -> bool
 		generation_error.emit("Set Replicate API key in Settings!")
 		return false
 
-	# Terrain tiles are extracted from transitions
-	if asset_type == "terrain":
-		generation_error.emit("Terrains are extracted from transitions automatically!")
-		return false
-
 	_start_generation(name, data, asset_type)
 	return true
 
@@ -57,19 +52,15 @@ func regenerate(name: String, data: Dictionary, asset_type: String) -> bool:
 		generation_error.emit("Set Replicate API key in Settings!")
 		return false
 
-	if asset_type == "terrain":
-		generation_error.emit("Terrains are extracted from transitions. Regenerate the transition instead!")
-		return false
-
 	# Reset the generated flag in manifest
 	if _asset_manager:
 		match asset_type:
+			"terrain":
+				_asset_manager.reset_terrain(name)
 			"transition":
 				var from_t: String = data.get("from", "")
 				var to_t: String = data.get("to", "")
 				_asset_manager.reset_transition(from_t, to_t)
-				_asset_manager.reset_terrain(from_t)
-				_asset_manager.reset_terrain(to_t)
 			"object":
 				_asset_manager.reset_object(name)
 			"structure":
@@ -80,6 +71,7 @@ func regenerate(name: String, data: Dictionary, asset_type: String) -> bool:
 
 
 ## Generate all pending assets
+## Order: Terrains first (single_tile), then Transitions (tileset_advanced), then Objects/Structures
 func generate_all() -> int:
 	if _replicate_key.is_empty():
 		generation_error.emit("Set Replicate API key in Settings first!")
@@ -90,14 +82,31 @@ func generate_all() -> int:
 
 	var started := 0
 
-	# Transitions (will also extract terrain tiles)
+	# 1. TERRAINS FIRST - generate base tiles using single_tile style
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	for terrain_name in terrains:
+		var data: Dictionary = terrains[terrain_name]
+		if not data.get("generated", false):
+			_start_generation(terrain_name, data, "terrain")
+			started += 1
+
+	# 2. TRANSITIONS - only if both terrains are generated
+	# tileset_advanced uses input_image and extra_input_image from the terrain tiles
 	for key in _asset_manager.get_transitions():
 		var data: Dictionary = _asset_manager.get_transitions()[key]
 		if not data.get("generated", false):
-			_start_generation(key, data, "transition")
-			started += 1
+			var from_t: String = data.get("from", "")
+			var to_t: String = data.get("to", "")
+			# Check if both terrains are generated
+			var from_ready: bool = terrains.has(from_t) and terrains[from_t].get("generated", false)
+			var to_ready: bool = terrains.has(to_t) and terrains[to_t].get("generated", false)
+			if from_ready and to_ready:
+				_start_generation(key, data, "transition")
+				started += 1
+			else:
+				print("[AssetGen] Skipping transition %s - waiting for terrains" % key)
 
-	# Objects
+	# 3. Objects
 	for key in _asset_manager.get_objects():
 		var data: Dictionary = _asset_manager.get_objects()[key]
 		var generated: int = data.get("generated", 0)
@@ -108,7 +117,7 @@ func generate_all() -> int:
 			_start_generation(key, data_copy, "object")
 			started += 1
 
-	# Structures
+	# 4. Structures
 	for key in _asset_manager.get_structures():
 		var data: Dictionary = _asset_manager.get_structures()[key]
 		var generated: int = data.get("generated", 0)
@@ -156,12 +165,13 @@ func _start_generation(name: String, data: Dictionary, asset_type: String) -> vo
 					var from_data: Dictionary = terrains[from_t]
 					if from_data.get("generated", false):
 						var from_file: String = from_data.get("file", "")
-						from_image = _asset_manager.get_asset_path(from_file)
+						# Convert res:// path to absolute path for file reading
+						from_image = ProjectSettings.globalize_path(_asset_manager.get_asset_path(from_file))
 				if terrains.has(to_t):
 					var to_data: Dictionary = terrains[to_t]
 					if to_data.get("generated", false):
 						var to_file: String = to_data.get("file", "")
-						to_image = _asset_manager.get_asset_path(to_file)
+						to_image = ProjectSettings.globalize_path(_asset_manager.get_asset_path(to_file))
 			client.generate_transition(from_t, to_t, prompt, tile_size, from_image, to_image)
 		"object":
 			var idx: int = data.get("generated", 0) + 1
@@ -234,7 +244,8 @@ func _on_completed(image_data: PackedByteArray, asset_info: Dictionary, client: 
 				var from_t: String = asset_info.get("from", "")
 				var to_t: String = asset_info.get("to", "")
 				_asset_manager.mark_transition_generated(from_t, to_t)
-				_extract_terrains_from_transition(image_data, from_t, to_t)
+				# Note: Terrains are now generated separately with single_tile style
+				# No extraction needed - tileset_advanced uses terrain images as input
 			"object":
 				_asset_manager.mark_object_generated(asset_name)
 			"structure":
@@ -254,65 +265,3 @@ func _on_error(error: String, client: RefCounted) -> void:
 	generation_error.emit(error)
 	_update_status()
 	assets_refreshed.emit()
-
-
-## Extract pure terrain tiles from a transition tileset (4x5 wang grid)
-## rd-tile tileset_advanced layout:
-##   - Top-left (0,0) = pure "extra_prompt" terrain (the "to" terrain)
-##   - Bottom-right (3,4) = pure "prompt" terrain (the "from" terrain)
-func _extract_terrains_from_transition(image_data: PackedByteArray, from_terrain: String, to_terrain: String) -> void:
-	var img := Image.new()
-	var err := img.load_png_from_buffer(image_data)
-	if err != OK:
-		print("[Assets] Failed to load transition image for extraction")
-		return
-
-	var tile_w: int = img.get_width() / 4
-	var tile_h: int = img.get_height() / 5
-
-	print("[Assets] Extracting terrains from transition, tile size: ", tile_w, "x", tile_h)
-
-	# rd-tile puts "prompt" (from_terrain) at BOTTOM-RIGHT (3,4)
-	# and "extra_prompt" (to_terrain) at TOP-LEFT (0,0)
-	_extract_and_save_terrain_tile(img, to_terrain, 0, 0, tile_w, tile_h)
-	_extract_and_save_terrain_tile(img, from_terrain, 3, 4, tile_w, tile_h)
-
-
-func _extract_and_save_terrain_tile(tileset_img: Image, terrain_name: String, col: int, row: int, tile_w: int, tile_h: int) -> void:
-	if _asset_manager:
-		var terrains: Dictionary = _asset_manager.get_terrains()
-		if terrains.has(terrain_name):
-			var terrain_data: Dictionary = terrains[terrain_name]
-			if terrain_data.get("generated", false):
-				print("[Assets] Terrain already generated, skipping: ", terrain_name)
-				return
-
-	var tile_img := Image.create(tile_w, tile_h, false, tileset_img.get_format())
-
-	var src_x := col * tile_w
-	var src_y := row * tile_h
-
-	for py in range(tile_h):
-		for px in range(tile_w):
-			if src_x + px < tileset_img.get_width() and src_y + py < tileset_img.get_height():
-				var pixel := tileset_img.get_pixel(src_x + px, src_y + py)
-				tile_img.set_pixel(px, py, pixel)
-
-	var terrain_path := "res://assets/terrain/" + terrain_name + ".png"
-	var abs_path := ProjectSettings.globalize_path(terrain_path)
-
-	var folder_abs := abs_path.get_base_dir()
-	var dir := DirAccess.open(ProjectSettings.globalize_path("res://"))
-	if dir:
-		if not dir.dir_exists(folder_abs):
-			dir.make_dir_recursive(folder_abs)
-
-	var save_err := tile_img.save_png(abs_path)
-	if save_err != OK:
-		print("[Assets] Failed to save extracted terrain: ", terrain_name, " error: ", save_err)
-		return
-
-	print("[Assets] Extracted terrain from transition: ", terrain_name)
-
-	if _asset_manager:
-		_asset_manager.mark_terrain_generated(terrain_name)

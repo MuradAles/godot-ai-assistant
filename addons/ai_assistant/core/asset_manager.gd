@@ -219,6 +219,12 @@ func set_style(style: String) -> void:
 	save_manifest()
 
 
+## Set the terrain order (for elevation-based generation)
+func set_terrain_order(terrains: Array) -> void:
+	_manifest.terrain_order = terrains
+	save_manifest()
+
+
 ## Check if any assets are needed
 func has_pending_assets() -> bool:
 	# Check terrains first (must be generated before transitions)

@@ -126,19 +126,25 @@ func _execute_finalize_world() -> void:
 	if _asset_manager:
 		_asset_manager.clear()
 
+	# Sort terrains by elevation (lowest to highest) for proper terrain generation
+	var terrains_array: Array = _pending_world.get("terrains", [])
+	terrains_array = _sort_terrains_by_elevation(terrains_array)
+	_pending_world.terrains = terrains_array
+
 	# Add terrains to manifest
 	if _asset_manager:
-		var terrains_array: Array = _pending_world.get("terrains", [])
+		# Also set the terrain_order in manifest
+		_asset_manager.set_terrain_order(terrains_array)
 		for t in terrains_array:
 			var terrain_prompt: String = _get_terrain_prompt(t)
 			_asset_manager.add_terrain(t, terrain_prompt)
 
-		# Add transitions
+		# Add transitions - ONLY between adjacent terrains in elevation order
+		# No wrap-around: water-grass-forest-snow means only 3 transitions needed
 		var terrain_count: int = terrains_array.size()
-		for i in range(terrain_count):
-			var next_i: int = (i + 1) % terrain_count
+		for i in range(terrain_count - 1):  # Stop before last terrain
 			var from_t: String = terrains_array[i]
-			var to_t: String = terrains_array[next_i]
+			var to_t: String = terrains_array[i + 1]
 			var trans_prompt: String = from_t + " to " + to_t + " transition"
 			_asset_manager.add_transition(from_t, to_t, trans_prompt)
 
@@ -320,6 +326,30 @@ func _get_terrain_prompt(terrain: String) -> String:
 			return "white snow, ice, frozen ground"
 		_:
 			return terrain + " terrain"
+
+
+## Sort terrains by elevation (lowest to highest)
+## This ensures terrain generation and transitions work correctly
+func _sort_terrains_by_elevation(terrains: Array) -> Array:
+	# Define elevation order for known terrain types
+	var elevation_order := {
+		"water": 0,
+		"sand": 1,
+		"grass": 2,
+		"dirt": 3,
+		"forest": 4,
+		"mountain": 5,
+		"rock": 5,
+		"snow": 6
+	}
+
+	var sorted := terrains.duplicate()
+	sorted.sort_custom(func(a, b):
+		var elev_a: int = elevation_order.get(a, 3)  # Default to middle elevation
+		var elev_b: int = elevation_order.get(b, 3)
+		return elev_a < elev_b
+	)
+	return sorted
 
 
 ## Validate and save a mechanic script

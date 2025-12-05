@@ -22,7 +22,7 @@ var _setup_done := false
 
 # Modular components
 var _chat_handler: ChatHandler
-var _asset_generator: AssetGenerator
+var _asset_generator: RefCounted
 var _world_builder: WorldBuilder
 var _settings_manager: SettingsManager
 var _asset_manager: RefCounted
@@ -101,13 +101,17 @@ func _setup_modules() -> void:
 	_chat_handler.set_decision_callback(_on_ai_decision)
 	_chat_handler.set_mechanic_callback(_on_mechanic_generated)
 
-	# Asset Generator
-	_asset_generator = AssetGenerator.new()
-	_asset_generator.setup(_asset_manager, self)
-	_asset_generator.generation_status_changed.connect(_on_gen_status)
-	_asset_generator.asset_saved.connect(_on_asset_saved)
-	_asset_generator.generation_error.connect(_on_gen_error)
-	_asset_generator.assets_refreshed.connect(_refresh_assets_tab)
+	# Asset Generator (load explicitly to avoid class_name caching issues in @tool scripts)
+	var AssetGenScript = load("res://addons/ai_assistant/ui/asset_generator.gd")
+	if AssetGenScript:
+		_asset_generator = AssetGenScript.new()
+		_asset_generator.setup(_asset_manager, self)
+		_asset_generator.generation_status_changed.connect(_on_gen_status)
+		_asset_generator.asset_saved.connect(_on_asset_saved)
+		_asset_generator.generation_error.connect(_on_gen_error)
+		_asset_generator.assets_refreshed.connect(_refresh_assets_tab)
+	else:
+		push_error("[AI Plugin] Failed to load asset_generator.gd")
 
 	# World Builder
 	_world_builder = WorldBuilder.new()
@@ -133,7 +137,8 @@ func _connect_signals() -> void:
 func _apply_settings() -> void:
 	_chat_handler.set_api_key(_settings_manager.api_key)
 	_chat_handler.set_model(_settings_manager.ai_model)
-	_asset_generator.set_replicate_key(_settings_manager.replicate_key)
+	if _asset_generator:
+		_asset_generator.set_replicate_key(_settings_manager.replicate_key)
 
 
 func _find(node_name: String) -> Node:
@@ -165,7 +170,10 @@ func _on_settings_pressed() -> void:
 
 
 func _on_generate_all_pressed() -> void:
-	var started := _asset_generator.generate_all()
+	if not _asset_generator:
+		_chat_handler.sys("Asset generator not loaded!", Color.RED)
+		return
+	var started: int = _asset_generator.generate_all()
 	if started > 0:
 		_chat_handler.sys("Started " + str(started) + " parallel generations", Color.CYAN)
 	else:
@@ -292,7 +300,7 @@ func _add_asset_section(title: String, assets: Dictionary, asset_type: String) -
 
 	var header := Label.new()
 	if asset_type == "terrain":
-		header.text = title + " (extracted from transitions)"
+		header.text = title + " (generate first, then transitions)"
 	else:
 		header.text = title
 	header.add_theme_font_size_override("font_size", 14)
@@ -383,26 +391,18 @@ func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void
 	status.custom_minimum_size.x = 40
 	hbox.add_child(status)
 
-	# Buttons
-	if asset_type == "terrain":
-		if not is_done:
-			var lbl := Label.new()
-			lbl.text = "(auto)"
-			lbl.add_theme_font_size_override("font_size", 10)
-			lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-			hbox.add_child(lbl)
-	elif not is_done:
+	# Buttons - all asset types can be generated/regenerated
+	if not is_done:
 		var btn := Button.new()
 		btn.text = "Generate"
 		btn.pressed.connect(_on_generate_asset.bind(name, data, asset_type, btn))
 		hbox.add_child(btn)
 	else:
-		if asset_type != "terrain":
-			var regen_btn := Button.new()
-			regen_btn.text = "Regen"
-			regen_btn.tooltip_text = "Regenerate this asset"
-			regen_btn.pressed.connect(_on_regenerate_asset.bind(name, data, asset_type, regen_btn))
-			hbox.add_child(regen_btn)
+		var regen_btn := Button.new()
+		regen_btn.text = "Regen"
+		regen_btn.tooltip_text = "Regenerate this asset"
+		regen_btn.pressed.connect(_on_regenerate_asset.bind(name, data, asset_type, regen_btn))
+		hbox.add_child(regen_btn)
 
 	_asset_container.add_child(hbox)
 

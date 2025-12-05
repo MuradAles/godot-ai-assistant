@@ -8,6 +8,7 @@ extends Node2D
 @export var world_height: int = 128
 @export var world_seed: int = 0
 @export var tile_size: int = 16
+@export var camera_zoom: float = 3.0  # Higher = more zoomed in (larger tiles)
 @export var theme: String = "plains"
 
 var terrain_layer: TileMapLayer
@@ -27,11 +28,41 @@ var _manifest_terrains: Array[String] = []
 
 # Asset cache
 var _terrain_textures: Dictionary = {}  # terrain_name -> Texture2D
-var _transition_textures: Dictionary = {}  # "from_to" -> Array[Texture2D] (20 wang tiles)
+var _transition_textures: Dictionary = {}  # "from_to" -> Array[Texture2D] (wang tiles)
+var _transition_grid_sizes: Dictionary = {}  # "from_to" -> Vector2i(cols, rows)
 var _object_textures: Dictionary = {}   # object_name -> Array[Texture2D] (multiple variants)
 
 # Wang tile parser
 var _wang_tiles: RefCounted = null
+
+# RetroDiffusion 4x5 Wang tile layout -> Wang index mapping
+const RD_LAYOUT := [
+	[0,  1,  3,  2],
+	[0,  5, 15, 10],
+	[0,  4, 12,  8],
+	[15, 14, 13,  6],
+	[15, 11,  7,  9],
+]
+
+# Wang index -> RetroDiffusion atlas coordinates (primary tiles)
+const WANG_TO_RD: Dictionary = {
+	0:  Vector2i(0, 0),   # Full outside
+	1:  Vector2i(1, 0),   # BR corner inside
+	2:  Vector2i(3, 0),   # BL corner inside
+	3:  Vector2i(2, 0),   # Bottom edge inside
+	4:  Vector2i(1, 2),   # TR corner inside
+	5:  Vector2i(1, 1),   # Right edge inside
+	6:  Vector2i(3, 3),   # Diagonal TR-BL
+	7:  Vector2i(2, 4),   # Missing TL corner
+	8:  Vector2i(3, 2),   # TL corner inside
+	9:  Vector2i(3, 4),   # Diagonal TL-BR
+	10: Vector2i(3, 1),   # Left edge inside
+	11: Vector2i(1, 4),   # Missing TR corner
+	12: Vector2i(2, 2),   # Top edge inside
+	13: Vector2i(2, 3),   # Missing BL corner
+	14: Vector2i(1, 3),   # Missing BR corner
+	15: Vector2i(2, 1),   # Full inside
+}
 
 # Noise for terrain distribution
 var _elevation_noise: FastNoiseLite
@@ -106,15 +137,22 @@ func _load_manifest() -> void:
 		return
 
 	var data: Dictionary = json.data
-	var terrain_dict: Dictionary = data.get("terrain", {})
 
-	for terrain_name in terrain_dict.keys():
-		_manifest_terrains.append(terrain_name)
+	# Use terrain_order if available (preserves elevation ordering)
+	var terrain_order: Array = data.get("terrain_order", [])
+	if terrain_order.size() > 0:
+		for terrain_name in terrain_order:
+			_manifest_terrains.append(terrain_name)
+	else:
+		# Fallback to terrain dictionary keys (unordered)
+		var terrain_dict: Dictionary = data.get("terrain", {})
+		for terrain_name in terrain_dict.keys():
+			_manifest_terrains.append(terrain_name)
 
 	if _manifest_terrains.is_empty():
 		_manifest_terrains = ["water", "sand", "grass"]
 
-	print("Loaded manifest terrains: ", _manifest_terrains)
+	print("[World] Loaded terrain order: ", _manifest_terrains)
 
 
 func _setup_noise(p_seed: int) -> void:
@@ -257,36 +295,41 @@ func _build_tilemap_from_manifest(terrain_data: Array, structures_data: Dictiona
 	terrain_layer.tile_set = tileset
 	add_child(terrain_layer)
 
-	# Transition layer sits between terrain and structures
+	# Transition layer overlays terrain where different terrains meet
 	transition_layer = TileMapLayer.new()
 	transition_layer.name = "Transitions"
 	transition_layer.tile_set = _create_transition_tileset()
-	transition_layer.z_index = 0  # Same level as terrain, rendered after
+	transition_layer.z_index = 1  # Above terrain to overlay transitions
 	add_child(transition_layer)
 
 	structure_layer = TileMapLayer.new()
 	structure_layer.name = "Structures"
 	structure_layer.tile_set = tileset
-	structure_layer.z_index = 1
+	structure_layer.z_index = 2
 	add_child(structure_layer)
 
 	object_sprites = Node2D.new()
 	object_sprites.name = "ObjectSprites"
-	object_sprites.z_index = 2
+	object_sprites.z_index = 3
 	add_child(object_sprites)
 
-	# First, identify which cells need transitions and which transitions are available
-	var transition_cells := _get_transition_cells(terrain_data)
-
-	# Place terrain tiles (skip cells that will have transitions)
+	# Place ALL terrain tiles first (transitions will overlay)
 	for y in range(world_height):
 		for x in range(world_width):
-			var cell_key := Vector2i(x, y)
-			if not transition_cells.has(cell_key):
-				var terrain_idx: int = terrain_data[y][x]
-				terrain_layer.set_cell(cell_key, 0, Vector2i(terrain_idx, 0))
+			var terrain_idx: int = terrain_data[y][x]
+			terrain_layer.set_cell(Vector2i(x, y), 0, Vector2i(terrain_idx, 0))
 
-	# Place transition tiles where terrain types meet
+	# Find cells that need transitions and place transition tiles on top
+	var transition_cells := _get_transition_cells(terrain_data)
+	print("[World] Found %d cells needing Wang tile transitions" % transition_cells.size())
+
+	# Log wang index distribution for debugging
+	var wang_counts: Dictionary = {}
+	for cell_pos in transition_cells.keys():
+		var wang_idx: int = transition_cells[cell_pos]["wang_index"]
+		wang_counts[wang_idx] = wang_counts.get(wang_idx, 0) + 1
+	print("[World] Wang index distribution: ", wang_counts)
+
 	_place_transition_tiles(terrain_data, transition_cells)
 
 	# Place structure sprites
@@ -396,8 +439,23 @@ func _create_transition_tileset() -> TileSet:
 			if ResourceLoader.exists(trans_path):
 				var trans_tex: Texture2D = load(trans_path)
 				if trans_tex:
-					# Parse the 4x5 wang tileset
-					var tiles := _parse_wang_tileset(trans_tex)
+					# Calculate actual grid size from texture dimensions
+					var tex_width: int = trans_tex.get_width()
+					var tex_height: int = trans_tex.get_height()
+					var cols: int = tex_width / tile_size
+					var rows: int = tex_height / tile_size
+
+					print("[World] Transition %s texture: %dx%d, grid: %dx%d tiles" % [trans_key, tex_width, tex_height, cols, rows])
+
+					if cols <= 0 or rows <= 0:
+						push_warning("[World] Invalid transition texture size for: " + trans_key)
+						continue
+
+					# Store grid size for later tile selection
+					_transition_grid_sizes[trans_key] = Vector2i(cols, rows)
+
+					# Parse the wang tileset with actual dimensions
+					var tiles := _parse_wang_tileset(trans_tex, cols, rows)
 					_transition_textures[trans_key] = tiles
 
 					# Create atlas source for this transition
@@ -406,24 +464,21 @@ func _create_transition_tileset() -> TileSet:
 					t_src.texture_region_size = Vector2i(tile_size, tile_size)
 					ts.add_source(t_src, source_id)
 
-					# Create all 20 tiles in the 4x5 grid
-					for row in range(5):
-						for col in range(4):
+					# Create tiles based on actual grid size
+					for row in range(rows):
+						for col in range(cols):
 							t_src.create_tile(Vector2i(col, row))
 
-					print("[World] Loaded transition tileset: ", trans_key, " as source ", source_id)
+					print("[World] Loaded transition tileset: ", trans_key, " as source ", source_id, " with ", cols * rows, " tiles")
 					source_id += 1
 
 	return ts
 
 
-## Parse a wang tileset image (64x80 for 16px tiles) into individual tiles
-func _parse_wang_tileset(tileset_texture: Texture2D) -> Array[Texture2D]:
+## Parse a wang tileset image into individual tiles
+func _parse_wang_tileset(tileset_texture: Texture2D, cols: int = 4, rows: int = 5) -> Array[Texture2D]:
 	var tiles: Array[Texture2D] = []
 	var img := tileset_texture.get_image()
-
-	var cols := 4
-	var rows := 5
 
 	for row in range(rows):
 		for col in range(cols):
@@ -441,50 +496,173 @@ func _parse_wang_tileset(tileset_texture: Texture2D) -> Array[Texture2D]:
 	return tiles
 
 
-## Get cells that need transition tiles and have available tilesets
+## Calculate Wang tile index based on which neighbors have the inside terrain
+## terrain_data: 2D array of terrain indices
+## x, y: position to calculate transition for (should be an OUTSIDE terrain cell)
+## inside_terrain_idx: the "inside" terrain that creeps into corners
+##
+## We check ALL 8 neighbors (cardinal + diagonal) to determine corners:
+## - Cardinal neighbors affect TWO corners each (edges)
+## - Diagonal neighbors affect ONE corner each (corners only)
+func _calculate_wang_index(terrain_data: Array, x: int, y: int, inside_terrain_idx: int) -> int:
+	var height: int = terrain_data.size()
+	var width: int = terrain_data[0].size() if height > 0 else 0
+
+	# Check all 8 neighbors for inside terrain
+	# Cardinal neighbors
+	var north_inside: bool = false
+	var east_inside: bool = false
+	var south_inside: bool = false
+	var west_inside: bool = false
+	# Diagonal neighbors
+	var nw_inside: bool = false
+	var ne_inside: bool = false
+	var sw_inside: bool = false
+	var se_inside: bool = false
+
+	# Cardinal checks
+	if y > 0:
+		north_inside = terrain_data[y - 1][x] == inside_terrain_idx
+	if x + 1 < width:
+		east_inside = terrain_data[y][x + 1] == inside_terrain_idx
+	if y + 1 < height:
+		south_inside = terrain_data[y + 1][x] == inside_terrain_idx
+	if x > 0:
+		west_inside = terrain_data[y][x - 1] == inside_terrain_idx
+
+	# Diagonal checks
+	if x > 0 and y > 0:
+		nw_inside = terrain_data[y - 1][x - 1] == inside_terrain_idx
+	if x + 1 < width and y > 0:
+		ne_inside = terrain_data[y - 1][x + 1] == inside_terrain_idx
+	if x > 0 and y + 1 < height:
+		sw_inside = terrain_data[y + 1][x - 1] == inside_terrain_idx
+	if x + 1 < width and y + 1 < height:
+		se_inside = terrain_data[y + 1][x + 1] == inside_terrain_idx
+
+	# Convert to corner values
+	# A corner is "inside" if ANY adjacent neighbor (cardinal OR diagonal) has inside terrain
+	var tl: int = 1 if (north_inside or west_inside or nw_inside) else 0
+	var tr: int = 1 if (north_inside or east_inside or ne_inside) else 0
+	var bl: int = 1 if (south_inside or west_inside or sw_inside) else 0
+	var br: int = 1 if (south_inside or east_inside or se_inside) else 0
+
+	# Wang index formula: (TL × 8) + (TR × 4) + (BL × 2) + BR
+	return (tl * 8) + (tr * 4) + (bl * 2) + br
+
+
+## Get Wang tile atlas coordinates from wang index
+func _get_wang_tile_coords(wang_index: int, grid_cols: int = 4, grid_rows: int = 5) -> Vector2i:
+	# Use the WANG_TO_RD lookup for standard 4x5 RetroDiffusion layout
+	if grid_cols == 4 and grid_rows == 5:
+		return WANG_TO_RD.get(wang_index, Vector2i(0, 0))
+
+	# For non-standard grids, calculate position from RD_LAYOUT
+	for row in range(mini(grid_rows, 5)):
+		for col in range(mini(grid_cols, 4)):
+			if RD_LAYOUT[row][col] == wang_index:
+				return Vector2i(col, row)
+
+	return Vector2i(0, 0)
+
+
+## Find all cells that need transition tiles between terrain pairs
 func _get_transition_cells(terrain_data: Array) -> Dictionary:
-	var cells: Dictionary = {}  # Vector2i -> transition info
+	var cells: Dictionary = {}  # Vector2i -> {from_idx, to_idx, wang_index}
 	var manifest := _load_manifest_data()
 	var transitions: Dictionary = manifest.get("transitions", {})
 
-	# Build available transitions set
+	# Build map of available transitions: "from_to" -> true
 	var available_transitions: Dictionary = {}
 	for trans_key in transitions.keys():
 		var trans_data: Dictionary = transitions[trans_key]
 		if trans_data.get("generated", false):
 			available_transitions[trans_key] = true
 
-	# Find cells at terrain boundaries with available transitions
+	# Check every cell for transitions
 	for y in range(world_height):
 		for x in range(world_width):
 			var current_idx: int = terrain_data[y][x]
 			var current_terrain: String = _manifest_terrains[current_idx] if current_idx < _manifest_terrains.size() else ""
-			var neighbors := _get_different_neighbors(terrain_data, x, y, current_idx)
 
-			if neighbors.size() > 0:
-				var neighbor_idx: int = neighbors[0]["terrain_idx"]
-				var neighbor_terrain: String = _manifest_terrains[neighbor_idx] if neighbor_idx < _manifest_terrains.size() else ""
+			# Check ALL 8 neighbors (cardinal + diagonal) for different terrain
+			var neighbor_terrains: Dictionary = {}  # terrain_name -> terrain_idx
+			var dirs: Array[Vector2i] = [
+				Vector2i(0, -1),   # N
+				Vector2i(1, -1),   # NE
+				Vector2i(1, 0),    # E
+				Vector2i(1, 1),    # SE
+				Vector2i(0, 1),    # S
+				Vector2i(-1, 1),   # SW
+				Vector2i(-1, 0),   # W
+				Vector2i(-1, -1),  # NW
+			]
 
-				var trans_key := current_terrain + "_" + neighbor_terrain
-				var reverse_key := neighbor_terrain + "_" + current_terrain
+			for dir: Vector2i in dirs:
+				var nx: int = x + dir.x
+				var ny: int = y + dir.y
+				if nx >= 0 and nx < world_width and ny >= 0 and ny < world_height:
+					var neighbor_idx: int = terrain_data[ny][nx]
+					if neighbor_idx != current_idx:
+						var neighbor_terrain: String = _manifest_terrains[neighbor_idx] if neighbor_idx < _manifest_terrains.size() else ""
+						neighbor_terrains[neighbor_terrain] = neighbor_idx
+
+			# For each neighboring terrain type, check if we have a transition tileset
+			for neighbor_terrain in neighbor_terrains.keys():
+				var neighbor_idx: int = neighbor_terrains[neighbor_terrain]
+
+				# Try both transition directions
+				var trans_key: String = current_terrain + "_" + neighbor_terrain
+				var reverse_key: String = neighbor_terrain + "_" + current_terrain
 
 				if available_transitions.has(trans_key) or available_transitions.has(reverse_key):
+					# Determine which transition tileset to use
+					# In the tileset: "from" terrain is visually INSIDE (fills corners)
+					#                 "to" terrain is visually OUTSIDE (background)
+					var from_idx: int  # Inside terrain in the tileset
+					var to_idx: int    # Outside terrain in the tileset
+					var used_key: String
+
+					if available_transitions.has(trans_key):
+						used_key = trans_key
+						from_idx = current_idx
+						to_idx = neighbor_idx
+					else:
+						used_key = reverse_key
+						from_idx = neighbor_idx
+						to_idx = current_idx
+
+					# Only place transition tiles on cells with the OUTSIDE terrain
+					# The tileset shows "from" (inside) terrain creeping into "to" (outside)
+					# So we place these tiles on "to" terrain cells
+					if current_idx != to_idx:
+						continue  # Skip - this cell has the inside terrain
+
+					# Calculate wang index with "from" terrain as INSIDE (1)
+					# This matches how the RetroDiffusion tileset is generated
+					var wang_index := _calculate_wang_index(terrain_data, x, y, from_idx)
+
+					# Skip fully outside (0) or fully inside (15) - no transition needed
+					if wang_index == 0 or wang_index == 15:
+						continue
+
 					cells[Vector2i(x, y)] = {
-						"current": current_terrain,
-						"neighbor": neighbor_terrain,
-						"neighbors": neighbors
+						"from_idx": from_idx,
+						"to_idx": to_idx,
+						"trans_key": used_key,
+						"wang_index": wang_index
 					}
+					break  # Only one transition per cell
 
 	return cells
 
 
-## Place transition tiles where different terrains meet
-## Transition tiles REPLACE base terrain (not overlay)
+## Place transition tiles using proper Wang tile selection
 func _place_transition_tiles(terrain_data: Array, transition_cells: Dictionary) -> void:
 	var manifest := _load_manifest_data()
 	var transitions: Dictionary = manifest.get("transitions", {})
 
-	# Build a map of transition keys to source IDs
+	# Build map of transition keys to source IDs
 	var transition_sources: Dictionary = {}
 	var source_id := 0
 	for trans_key in transitions.keys():
@@ -493,148 +671,20 @@ func _place_transition_tiles(terrain_data: Array, transition_cells: Dictionary) 
 			transition_sources[trans_key] = source_id
 			source_id += 1
 
-	# Place transition tiles
+	# Place each transition tile
 	for cell_pos in transition_cells.keys():
 		var cell_info: Dictionary = transition_cells[cell_pos]
-		var current_terrain: String = cell_info["current"]
-		var neighbor_terrain: String = cell_info["neighbor"]
-		var neighbors: Array = cell_info["neighbors"]
+		var trans_key: String = cell_info["trans_key"]
+		var wang_index: int = cell_info["wang_index"]
 
-		# Try both directions for transition key
-		var trans_key := current_terrain + "_" + neighbor_terrain
-		var reverse_key := neighbor_terrain + "_" + current_terrain
+		if not transition_sources.has(trans_key):
+			continue
 
-		var used_key := ""
-		var is_reverse := false
+		var src_id: int = transition_sources[trans_key]
+		var grid_size: Vector2i = _transition_grid_sizes.get(trans_key, Vector2i(4, 5))
+		var tile_coords := _get_wang_tile_coords(wang_index, grid_size.x, grid_size.y)
 
-		if transition_sources.has(trans_key):
-			used_key = trans_key
-		elif transition_sources.has(reverse_key):
-			used_key = reverse_key
-			is_reverse = true
-
-		if not used_key.is_empty():
-			var src_id: int = transition_sources[used_key]
-			var edge_mask := _calculate_edge_mask(neighbors, is_reverse)
-			var tile_coords := _edge_mask_to_tile_coords(edge_mask)
-
-			# Place in transition layer (which replaces terrain at this position)
-			transition_layer.set_cell(cell_pos, src_id, tile_coords)
-
-
-## Get list of neighbors with different terrain
-func _get_different_neighbors(terrain_data: Array, x: int, y: int, current_idx: int) -> Array:
-	var neighbors: Array = []
-
-	# Check 4 cardinal directions: top, right, bottom, left
-	var dirs := [
-		{"dx": 0, "dy": -1, "edge": "top"},
-		{"dx": 1, "dy": 0, "edge": "right"},
-		{"dx": 0, "dy": 1, "edge": "bottom"},
-		{"dx": -1, "dy": 0, "edge": "left"}
-	]
-
-	for dir in dirs:
-		var nx: int = x + dir["dx"]
-		var ny: int = y + dir["dy"]
-
-		if nx >= 0 and nx < world_width and ny >= 0 and ny < world_height:
-			var neighbor_idx: int = terrain_data[ny][nx]
-			if neighbor_idx != current_idx:
-				neighbors.append({
-					"edge": dir["edge"],
-					"terrain_idx": neighbor_idx,
-					"x": nx,
-					"y": ny
-				})
-
-	return neighbors
-
-
-## Calculate edge mask for wang tile selection
-## Returns a 4-bit mask: Top(8) Right(4) Bottom(2) Left(1)
-func _calculate_edge_mask(neighbors: Array, is_reverse: bool) -> int:
-	var mask := 0
-
-	for neighbor in neighbors:
-		var edge: String = neighbor["edge"]
-		match edge:
-			"top":
-				mask |= 8
-			"right":
-				mask |= 4
-			"bottom":
-				mask |= 2
-			"left":
-				mask |= 1
-
-	# If using reverse transition, invert the mask
-	if is_reverse:
-		mask = (~mask) & 0b1111
-
-	return mask
-
-
-## Convert edge mask to tile coordinates in the 4x5 wang tileset
-## rd-tile tileset_advanced layout (based on observation):
-## Row 0: Base terrain A variations
-## Row 1-3: Transition tiles with various edge combinations
-## Row 4: Base terrain B variations
-##
-## Edge mask: Top(8) Right(4) Bottom(2) Left(1) = which edges touch OTHER terrain
-func _edge_mask_to_tile_coords(edge_mask: int) -> Vector2i:
-	# rd-tile uses a blob/marching-squares style layout
-	# This mapping is approximate based on observed tileset output
-	# The tileset has 4 cols x 5 rows = 20 tiles
-
-	match edge_mask:
-		# No transition needed - use full terrain A (top-left)
-		0b0000:
-			return Vector2i(0, 0)
-
-		# Single edge transitions
-		0b1000:  # Top edge different
-			return Vector2i(1, 2)
-		0b0100:  # Right edge different
-			return Vector2i(2, 1)
-		0b0010:  # Bottom edge different
-			return Vector2i(1, 1)
-		0b0001:  # Left edge different
-			return Vector2i(0, 1)
-
-		# Corner transitions (two adjacent edges)
-		0b1100:  # Top + Right
-			return Vector2i(3, 2)
-		0b0110:  # Right + Bottom
-			return Vector2i(3, 1)
-		0b0011:  # Bottom + Left
-			return Vector2i(0, 2)
-		0b1001:  # Top + Left
-			return Vector2i(2, 2)
-
-		# Opposite edges (channel)
-		0b1010:  # Top + Bottom
-			return Vector2i(1, 3)
-		0b0101:  # Left + Right
-			return Vector2i(2, 3)
-
-		# Three edges (peninsula into other terrain)
-		0b1110:  # Top + Right + Bottom
-			return Vector2i(3, 3)
-		0b0111:  # Right + Bottom + Left
-			return Vector2i(0, 3)
-		0b1011:  # Top + Bottom + Left
-			return Vector2i(1, 4)
-		0b1101:  # Top + Right + Left
-			return Vector2i(2, 4)
-
-		# All edges different - use full terrain B (bottom-right area)
-		0b1111:
-			return Vector2i(3, 4)
-
-		# Default fallback
-		_:
-			return Vector2i(0, 0)
+		transition_layer.set_cell(cell_pos, src_id, tile_coords)
 
 
 func _place_structure_sprites_manifest(structure_objects: Array) -> void:
@@ -1207,7 +1257,7 @@ func _find_spawn(data: Dictionary) -> Vector2:
 
 func _setup_camera() -> void:
 	camera = Camera2D.new()
-	camera.zoom = Vector2(2, 2)
+	camera.zoom = Vector2(camera_zoom, camera_zoom)
 	camera.position_smoothing_enabled = true
 	camera.limit_left = 0
 	camera.limit_top = 0
