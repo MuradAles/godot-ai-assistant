@@ -279,8 +279,9 @@ func _refresh_assets_tab() -> void:
 		child.queue_free()
 
 	_add_asset_section("Terrain", _asset_manager.get_terrains(), "terrain")
+	_add_all_terrain_section()  # Global objects that spawn everywhere
 	_add_asset_section("Transitions", _asset_manager.get_transitions(), "transition")
-	_add_asset_section("Objects", _asset_manager.get_objects(), "object")
+	# Objects are shown under each terrain's spawn list, not separately
 	_add_asset_section("Structures", _asset_manager.get_structures(), "structure")
 
 	var pending: int = _asset_manager.get_pending_count()
@@ -438,6 +439,14 @@ func _add_asset_item(name: String, data: Dictionary, asset_type: String) -> void
 	if variation_btn:
 		variation_btn.pressed.connect(_on_generate_variation.bind(name, data, variation_btn, prompt_edit))
 
+	# Add terrain spawns section (which objects spawn on this terrain)
+	if asset_type == "terrain":
+		_add_terrain_spawns_ui(vbox, name)
+
+	# Add global spawn controls for objects (add to all terrains / remove from all)
+	if asset_type == "object":
+		_add_object_global_spawn_ui(vbox, name)
+
 	_asset_container.add_child(vbox)
 
 
@@ -488,6 +497,719 @@ func _on_generate_variation(name: String, data: Dictionary, btn: Button, prompt_
 		btn.text = "+"
 	else:
 		_chat_handler.sys("Generating variation " + str(next_index) + " for " + name, Color.CYAN)
+
+
+## Add "All Terrain" section - objects that spawn on every terrain
+func _add_all_terrain_section() -> void:
+	if not _asset_manager:
+		return
+
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	if terrains.is_empty():
+		return
+
+	# Header
+	var header := Label.new()
+	header.text = "All Terrain (spawns everywhere)"
+	header.add_theme_font_size_override("font_size", 14)
+	header.add_theme_color_override("font_color", Color(0.9, 0.8, 0.6))
+	_asset_container.add_child(header)
+
+	# Panel container
+	var panel := PanelContainer.new()
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.15, 0.13, 0.1)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_border_width_all(1)
+	panel_style.border_color = Color(0.4, 0.35, 0.2)
+	panel_style.set_content_margin_all(8)
+	panel.add_theme_stylebox_override("panel", panel_style)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+
+	# Get objects that are on ALL terrains
+	var global_objects: Array = _get_global_spawn_objects()
+	var available_objects: Dictionary = _asset_manager.get_objects()
+
+	# Header row with add button
+	var header_row := HBoxContainer.new()
+	var label := Label.new()
+	label.text = "Objects on all terrains:"
+	label.add_theme_font_size_override("font_size", 11)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_row.add_child(label)
+
+	var add_btn := Button.new()
+	add_btn.text = "+ Add"
+	add_btn.tooltip_text = "Add object to ALL terrains"
+	add_btn.custom_minimum_size = Vector2(50, 22)
+	add_btn.pressed.connect(_on_add_global_spawn.bind(vbox, available_objects))
+	header_row.add_child(add_btn)
+	vbox.add_child(header_row)
+
+	# Show global objects
+	if global_objects.is_empty():
+		var empty := Label.new()
+		empty.text = "(no global objects)"
+		empty.add_theme_font_size_override("font_size", 10)
+		empty.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		vbox.add_child(empty)
+	else:
+		for obj_name in global_objects:
+			_add_global_spawn_row(vbox, obj_name)
+
+	panel.add_child(vbox)
+	_asset_container.add_child(panel)
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size.y = 10
+	_asset_container.add_child(spacer)
+
+
+## Get objects that exist on ALL terrains (intersection)
+func _get_global_spawn_objects() -> Array:
+	if not _asset_manager:
+		return []
+
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	if terrains.is_empty():
+		return []
+
+	var terrain_names: Array = terrains.keys()
+	if terrain_names.is_empty():
+		return []
+
+	# Start with objects from first terrain
+	var first_terrain: String = terrain_names[0]
+	var first_spawns: Array = _asset_manager.get_terrain_objects(first_terrain)
+	var global_objects: Array = []
+
+	for spawn in first_spawns:
+		global_objects.append(spawn.get("object", ""))
+
+	# Intersect with other terrains
+	for i in range(1, terrain_names.size()):
+		var terrain_name: String = terrain_names[i]
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		var spawn_names: Array = []
+		for spawn in spawns:
+			spawn_names.append(spawn.get("object", ""))
+
+		# Keep only objects that exist in this terrain too
+		var new_global: Array = []
+		for obj_name in global_objects:
+			if obj_name in spawn_names:
+				new_global.append(obj_name)
+		global_objects = new_global
+
+	return global_objects
+
+
+## Add a row for a global spawn object
+func _add_global_spawn_row(container: VBoxContainer, obj_name: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+
+	# Check if generated
+	var is_generated := false
+	var obj_data: Dictionary = {}
+	var file_path := ""
+	if _asset_manager:
+		var objects: Dictionary = _asset_manager.get_objects()
+		if objects.has(obj_name):
+			obj_data = objects[obj_name]
+			is_generated = obj_data.get("generated", 0) > 0
+			var folder: String = obj_data.get("folder", "objects/" + obj_name)
+			file_path = folder + "/" + obj_name + "_01.png"
+
+	# Thumbnail
+	var thumb := Panel.new()
+	thumb.custom_minimum_size = Vector2(24, 24)
+	var thumb_style := StyleBoxFlat.new()
+	thumb_style.bg_color = Color(0.2, 0.2, 0.2)
+	thumb_style.set_corner_radius_all(3)
+	thumb.add_theme_stylebox_override("panel", thumb_style)
+
+	if is_generated and not file_path.is_empty():
+		var full_path := "res://assets/" + file_path
+		if ResourceLoader.exists(full_path):
+			var tex := load(full_path) as Texture2D
+			if tex:
+				var tex_rect := TextureRect.new()
+				tex_rect.texture = tex
+				tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				tex_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+				tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+				thumb.add_child(tex_rect)
+	row.add_child(thumb)
+
+	# Name
+	var name_lbl := Label.new()
+	name_lbl.text = obj_name
+	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_lbl)
+
+	# Gen/Regen button
+	var gen_btn := Button.new()
+	gen_btn.text = "Regen" if is_generated else "Gen"
+	gen_btn.custom_minimum_size = Vector2(50, 22)
+	gen_btn.pressed.connect(_on_generate_spawn_object.bind(obj_name, obj_data, gen_btn, is_generated))
+	row.add_child(gen_btn)
+
+	# Remove from all button
+	var remove_btn := Button.new()
+	remove_btn.text = "×"
+	remove_btn.tooltip_text = "Remove from ALL terrains"
+	remove_btn.custom_minimum_size = Vector2(24, 22)
+	remove_btn.pressed.connect(_on_remove_global_spawn.bind(obj_name))
+	row.add_child(remove_btn)
+
+	container.add_child(row)
+
+
+## Add dialog for global spawn
+func _on_add_global_spawn(container: VBoxContainer, available_objects: Dictionary) -> void:
+	var dialog := Window.new()
+	dialog.title = "Add Object to All Terrains"
+	dialog.size = Vector2i(280, 140)
+	dialog.transient = true
+	dialog.exclusive = true
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.add_theme_constant_override("separation", 8)
+	vbox.offset_left = 10
+	vbox.offset_top = 10
+	vbox.offset_right = -10
+	vbox.offset_bottom = -10
+
+	var dropdown := OptionButton.new()
+	dropdown.add_item("-- Select or type below --", 0)
+	var idx := 1
+	for obj_name in available_objects.keys():
+		dropdown.add_item(obj_name, idx)
+		idx += 1
+	dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(dropdown)
+
+	var custom_input := LineEdit.new()
+	custom_input.placeholder_text = "Or type new: flower, coin..."
+	custom_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(custom_input)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(func(): dialog.queue_free())
+	btn_row.add_child(cancel_btn)
+
+	var add_btn := Button.new()
+	add_btn.text = "Add to All"
+	add_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_btn.pressed.connect(_on_confirm_global_spawn.bind(dropdown, custom_input, dialog, available_objects))
+	btn_row.add_child(add_btn)
+
+	vbox.add_child(btn_row)
+	dialog.add_child(vbox)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+
+## Confirm adding global spawn
+func _on_confirm_global_spawn(dropdown: OptionButton, custom_input: LineEdit, dialog: Window, available_objects: Dictionary) -> void:
+	var obj_name := ""
+	var custom_text := custom_input.text.strip_edges()
+	if not custom_text.is_empty():
+		obj_name = custom_text.to_lower().replace(" ", "_")
+	elif dropdown.selected > 0:
+		obj_name = dropdown.get_item_text(dropdown.selected)
+
+	if obj_name.is_empty():
+		_chat_handler.sys("Enter an object name", Color.YELLOW)
+		return
+
+	# Add to manifest if new
+	if not available_objects.has(obj_name):
+		var default_prompt := obj_name + ", top-down pixel art game sprite"
+		_asset_manager.add_object(obj_name, default_prompt, 1)
+
+	# Add to ALL terrains
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	var added := 0
+	for terrain_name in terrains.keys():
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		var exists := false
+		for spawn in spawns:
+			if spawn.get("object") == obj_name:
+				exists = true
+				break
+		if not exists:
+			_asset_manager.add_terrain_object(terrain_name, obj_name, 2.0)
+			added += 1
+
+	if added > 0:
+		_chat_handler.sys("Added " + obj_name + " to " + str(added) + " terrains", Color.GREEN)
+	else:
+		_chat_handler.sys(obj_name + " already on all terrains", Color.YELLOW)
+
+	dialog.queue_free()
+	_refresh_assets_tab()
+
+
+## Remove object from all terrains
+func _on_remove_global_spawn(obj_name: String) -> void:
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	var removed := 0
+	for terrain_name in terrains.keys():
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		for spawn in spawns:
+			if spawn.get("object") == obj_name:
+				_asset_manager.remove_terrain_object(terrain_name, obj_name)
+				removed += 1
+				break
+
+	if removed > 0:
+		_chat_handler.sys("Removed " + obj_name + " from " + str(removed) + " terrains", Color.GRAY)
+	_refresh_assets_tab()
+
+
+## Add UI for configuring which objects spawn on a terrain
+func _add_terrain_spawns_ui(container: VBoxContainer, terrain_name: String) -> void:
+	if not _asset_manager:
+		return
+
+	var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+	var available_objects: Dictionary = _asset_manager.get_objects()
+
+	# Main container with border/background
+	var panel := PanelContainer.new()
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.12, 0.12, 0.12)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_border_width_all(1)
+	panel_style.border_color = Color(0.25, 0.25, 0.25)
+	panel_style.set_content_margin_all(6)
+	panel.add_theme_stylebox_override("panel", panel_style)
+
+	var spawns_box := VBoxContainer.new()
+	spawns_box.add_theme_constant_override("separation", 4)
+
+	# Header row
+	var header_hbox := HBoxContainer.new()
+	header_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var spawns_label := Label.new()
+	spawns_label.text = "Objects on this terrain:"
+	spawns_label.add_theme_font_size_override("font_size", 11)
+	spawns_label.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
+	spawns_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_hbox.add_child(spawns_label)
+
+	var add_spawn_btn := Button.new()
+	add_spawn_btn.text = "+ Add"
+	add_spawn_btn.tooltip_text = "Add object that spawns on this terrain"
+	add_spawn_btn.custom_minimum_size = Vector2(50, 22)
+	add_spawn_btn.pressed.connect(_on_add_terrain_spawn.bind(terrain_name, spawns_box, available_objects))
+	header_hbox.add_child(add_spawn_btn)
+
+	spawns_box.add_child(header_hbox)
+
+	# Show existing spawns or empty message
+	if spawns.is_empty():
+		var empty_label := Label.new()
+		empty_label.text = "(no objects - click + Add)"
+		empty_label.add_theme_font_size_override("font_size", 10)
+		empty_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		spawns_box.add_child(empty_label)
+	else:
+		for spawn in spawns:
+			var obj_name: String = spawn.get("object", "")
+			var percent: float = spawn.get("percent", 1.0)
+			_add_spawn_row(spawns_box, terrain_name, obj_name, percent)
+
+	panel.add_child(spawns_box)
+	container.add_child(panel)
+
+
+## Add a row for a single spawn configuration with thumbnail and generate button
+func _add_spawn_row(container: VBoxContainer, terrain_name: String, obj_name: String, percent: float) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# Check if object asset is generated
+	var obj_data: Dictionary = {}
+	var is_generated := false
+	var file_path := ""
+	if _asset_manager:
+		var objects: Dictionary = _asset_manager.get_objects()
+		if objects.has(obj_name):
+			obj_data = objects[obj_name]
+			is_generated = obj_data.get("generated", 0) > 0
+			var folder: String = obj_data.get("folder", "objects/" + obj_name)
+			file_path = folder + "/" + obj_name + "_01.png"
+
+	# Thumbnail (24x24)
+	var thumb := Panel.new()
+	thumb.custom_minimum_size = Vector2(24, 24)
+	var thumb_style := StyleBoxFlat.new()
+	thumb_style.bg_color = Color(0.2, 0.2, 0.2)
+	thumb_style.set_corner_radius_all(3)
+	thumb.add_theme_stylebox_override("panel", thumb_style)
+
+	if is_generated and not file_path.is_empty():
+		var full_path := "res://assets/" + file_path
+		if ResourceLoader.exists(full_path):
+			var tex := load(full_path) as Texture2D
+			if tex:
+				var tex_rect := TextureRect.new()
+				tex_rect.texture = tex
+				tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				tex_rect.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+				tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+				thumb.add_child(tex_rect)
+	row.add_child(thumb)
+
+	# Object name label
+	var obj_label := Label.new()
+	obj_label.text = obj_name
+	obj_label.add_theme_font_size_override("font_size", 11)
+	obj_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+	obj_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(obj_label)
+
+	# Percent spinbox
+	var spin := SpinBox.new()
+	spin.min_value = 0.1
+	spin.max_value = 100.0
+	spin.step = 0.1
+	spin.value = percent
+	spin.suffix = "%"
+	spin.custom_minimum_size.x = 70
+	spin.tooltip_text = "Spawn chance per tile"
+	spin.value_changed.connect(_on_spawn_percent_changed.bind(terrain_name, obj_name))
+	row.add_child(spin)
+
+	# Size controls (WxH)
+	var obj_size: Vector2i = _asset_manager.get_object_size(obj_name) if _asset_manager else Vector2i(1, 1)
+
+	var size_container := HBoxContainer.new()
+	size_container.add_theme_constant_override("separation", 2)
+
+	var w_spin := SpinBox.new()
+	w_spin.min_value = 1
+	w_spin.max_value = 24  # Up to 24 tiles (384px at 16px tile_size)
+	w_spin.step = 1
+	w_spin.value = obj_size.x
+	w_spin.custom_minimum_size.x = 45
+	w_spin.tooltip_text = "Width in tiles"
+	w_spin.value_changed.connect(_on_object_size_changed.bind(obj_name, true))
+	size_container.add_child(w_spin)
+
+	var x_label := Label.new()
+	x_label.text = "×"
+	x_label.add_theme_font_size_override("font_size", 10)
+	size_container.add_child(x_label)
+
+	var h_spin := SpinBox.new()
+	h_spin.min_value = 1
+	h_spin.max_value = 24  # Up to 24 tiles (384px at 16px tile_size)
+	h_spin.step = 1
+	h_spin.value = obj_size.y
+	h_spin.custom_minimum_size.x = 45
+	h_spin.tooltip_text = "Height in tiles"
+	h_spin.value_changed.connect(_on_object_size_changed.bind(obj_name, false))
+	size_container.add_child(h_spin)
+
+	row.add_child(size_container)
+
+	# Generate/Regen button
+	var gen_btn := Button.new()
+	if is_generated:
+		gen_btn.text = "Regen"
+		gen_btn.tooltip_text = "Regenerate asset for " + obj_name
+	else:
+		gen_btn.text = "Gen"
+		gen_btn.tooltip_text = "Generate asset for " + obj_name
+	gen_btn.custom_minimum_size = Vector2(50, 22)
+	gen_btn.pressed.connect(_on_generate_spawn_object.bind(obj_name, obj_data, gen_btn, is_generated))
+	row.add_child(gen_btn)
+
+	# Remove button
+	var remove_btn := Button.new()
+	remove_btn.text = "×"
+	remove_btn.tooltip_text = "Remove " + obj_name + " from " + terrain_name
+	remove_btn.custom_minimum_size = Vector2(24, 22)
+	remove_btn.pressed.connect(_on_remove_terrain_spawn.bind(terrain_name, obj_name))
+	row.add_child(remove_btn)
+
+	container.add_child(row)
+
+
+## Generate or regenerate asset for a spawn object
+func _on_generate_spawn_object(obj_name: String, obj_data: Dictionary, btn: Button, is_regen: bool = false) -> void:
+	if not _asset_generator:
+		_chat_handler.sys("Asset generator not loaded!", Color.RED)
+		return
+
+	btn.disabled = true
+	btn.text = "..."
+
+	# Ensure object exists in manifest with default prompt if needed
+	if obj_data.is_empty():
+		obj_data = {"prompt": obj_name + ", top-down pixel art game sprite", "folder": "objects/" + obj_name, "generated": 0, "needed": 1}
+		if _asset_manager:
+			_asset_manager.add_object(obj_name, obj_data.get("prompt", ""), 1)
+
+	# Reset if regenerating
+	if is_regen and _asset_manager:
+		_asset_manager.reset_object(obj_name)
+
+	if _asset_generator.generate_single(obj_name, obj_data, "object"):
+		var action := "Regenerating" if is_regen else "Generating"
+		_chat_handler.sys(action + " " + obj_name + "...", Color.CYAN)
+	else:
+		btn.disabled = false
+		btn.text = "Regen" if is_regen else "Gen"
+		_chat_handler.sys("Failed to start generation - check API key", Color.YELLOW)
+
+
+## Handler for "+" button to add a new spawn - simple dialog
+func _on_add_terrain_spawn(terrain_name: String, container: VBoxContainer, available_objects: Dictionary) -> void:
+	var dialog := Window.new()
+	dialog.title = "Add Object to " + terrain_name.capitalize()
+	dialog.size = Vector2i(280, 140)
+	dialog.transient = true
+	dialog.exclusive = true
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.add_theme_constant_override("separation", 8)
+	vbox.offset_left = 10
+	vbox.offset_top = 10
+	vbox.offset_right = -10
+	vbox.offset_bottom = -10
+
+	# Dropdown for existing objects OR type new
+	var dropdown := OptionButton.new()
+	dropdown.add_item("-- Select or type below --", 0)
+	var idx := 1
+	for obj_name in available_objects.keys():
+		dropdown.add_item(obj_name, idx)
+		idx += 1
+	dropdown.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(dropdown)
+
+	# Custom input for new objects
+	var custom_input := LineEdit.new()
+	custom_input.placeholder_text = "Or type new: mushroom, crystal..."
+	custom_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(custom_input)
+
+	# Buttons
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(func(): dialog.queue_free())
+	btn_row.add_child(cancel_btn)
+
+	var add_btn := Button.new()
+	add_btn.text = "Add"
+	add_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_btn.pressed.connect(_on_add_spawn_confirmed_simple.bind(terrain_name, dropdown, custom_input, dialog, available_objects))
+	btn_row.add_child(add_btn)
+
+	vbox.add_child(btn_row)
+	dialog.add_child(vbox)
+
+	add_child(dialog)
+	dialog.popup_centered()
+
+
+## Simple add spawn - just name, generate button is on the row
+func _on_add_spawn_confirmed_simple(terrain_name: String, dropdown: OptionButton, custom_input: LineEdit, dialog: Window, available_objects: Dictionary) -> void:
+	var obj_name := ""
+
+	# Check custom input first
+	var custom_text := custom_input.text.strip_edges()
+	if not custom_text.is_empty():
+		obj_name = custom_text.to_lower().replace(" ", "_")
+	elif dropdown.selected > 0:
+		obj_name = dropdown.get_item_text(dropdown.selected)
+
+	if obj_name.is_empty():
+		_chat_handler.sys("Enter an object name", Color.YELLOW)
+		return
+
+	# Check if already on this terrain
+	var existing: Array = _asset_manager.get_terrain_objects(terrain_name)
+	for spawn in existing:
+		if spawn.get("object") == obj_name:
+			_chat_handler.sys(obj_name + " already on " + terrain_name, Color.YELLOW)
+			dialog.queue_free()
+			return
+
+	# Add to manifest if new object
+	if not available_objects.has(obj_name):
+		var default_prompt := obj_name + ", top-down pixel art game sprite"
+		_asset_manager.add_object(obj_name, default_prompt, 1)
+
+	# Add spawn to terrain
+	_asset_manager.add_terrain_object(terrain_name, obj_name, 2.0)
+	_chat_handler.sys("Added " + obj_name + " to " + terrain_name, Color.GREEN)
+
+	dialog.queue_free()
+	_refresh_assets_tab()
+
+
+## Handler for percent spinbox change
+func _on_spawn_percent_changed(value: float, terrain_name: String, obj_name: String) -> void:
+	if _asset_manager:
+		_asset_manager.set_terrain_object_percent(terrain_name, obj_name, value)
+
+
+## Handler for object size change
+func _on_object_size_changed(value: float, obj_name: String, is_width: bool) -> void:
+	if not _asset_manager:
+		return
+	var current_size: Vector2i = _asset_manager.get_object_size(obj_name)
+	var new_w: int = int(value) if is_width else current_size.x
+	var new_h: int = int(value) if not is_width else current_size.y
+	_asset_manager.set_object_size(obj_name, new_w, new_h)
+
+
+## Handler for removing a spawn
+func _on_remove_terrain_spawn(terrain_name: String, obj_name: String) -> void:
+	if _asset_manager:
+		_asset_manager.remove_terrain_object(terrain_name, obj_name)
+		_chat_handler.sys("Removed " + obj_name + " from " + terrain_name, Color.GRAY)
+	_refresh_assets_tab()
+
+
+## Add UI for objects to spawn on all terrains globally
+func _add_object_global_spawn_ui(container: VBoxContainer, obj_name: String) -> void:
+	if not _asset_manager:
+		return
+
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	if terrains.is_empty():
+		return
+
+	# Count how many terrains this object spawns on
+	var spawn_count := 0
+	var terrain_list: Array[String] = []
+	for terrain_name in terrains.keys():
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		for spawn in spawns:
+			if spawn.get("object") == obj_name:
+				spawn_count += 1
+				terrain_list.append(terrain_name)
+				break
+
+	# Container with border
+	var panel := PanelContainer.new()
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.1, 0.12, 0.15)
+	panel_style.set_corner_radius_all(4)
+	panel_style.set_border_width_all(1)
+	panel_style.border_color = Color(0.2, 0.25, 0.3)
+	panel_style.set_content_margin_all(6)
+	panel.add_theme_stylebox_override("panel", panel_style)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 8)
+
+	# Status label
+	var status_label := Label.new()
+	if spawn_count == 0:
+		status_label.text = "Spawns on: none"
+		status_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	else:
+		status_label.text = "Spawns on: " + ", ".join(terrain_list)
+		status_label.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
+	status_label.add_theme_font_size_override("font_size", 10)
+	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(status_label)
+
+	# + button (add to all terrains)
+	var add_all_btn := Button.new()
+	add_all_btn.text = "+"
+	add_all_btn.tooltip_text = "Add " + obj_name + " to ALL terrains (2% each)"
+	add_all_btn.custom_minimum_size = Vector2(28, 22)
+	add_all_btn.pressed.connect(_on_add_object_to_all_terrains.bind(obj_name))
+	hbox.add_child(add_all_btn)
+
+	# - button (remove from all terrains)
+	var remove_all_btn := Button.new()
+	remove_all_btn.text = "−"
+	remove_all_btn.tooltip_text = "Remove " + obj_name + " from ALL terrains"
+	remove_all_btn.custom_minimum_size = Vector2(28, 22)
+	remove_all_btn.disabled = spawn_count == 0
+	remove_all_btn.pressed.connect(_on_remove_object_from_all_terrains.bind(obj_name))
+	hbox.add_child(remove_all_btn)
+
+	panel.add_child(hbox)
+	container.add_child(panel)
+
+
+## Add object to all terrains at default percent
+func _on_add_object_to_all_terrains(obj_name: String) -> void:
+	if not _asset_manager:
+		return
+
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	var added_count := 0
+
+	for terrain_name in terrains.keys():
+		# Check if already exists
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		var already_exists := false
+		for spawn in spawns:
+			if spawn.get("object") == obj_name:
+				already_exists = true
+				break
+
+		if not already_exists:
+			_asset_manager.add_terrain_object(terrain_name, obj_name, 2.0)
+			added_count += 1
+
+	if added_count > 0:
+		_chat_handler.sys("Added " + obj_name + " to " + str(added_count) + " terrains at 2%", Color.GREEN)
+	else:
+		_chat_handler.sys(obj_name + " already on all terrains", Color.YELLOW)
+
+	_refresh_assets_tab()
+
+
+## Remove object from all terrains
+func _on_remove_object_from_all_terrains(obj_name: String) -> void:
+	if not _asset_manager:
+		return
+
+	var terrains: Dictionary = _asset_manager.get_terrains()
+	var removed_count := 0
+
+	for terrain_name in terrains.keys():
+		var spawns: Array = _asset_manager.get_terrain_objects(terrain_name)
+		for spawn in spawns:
+			if spawn.get("object") == obj_name:
+				_asset_manager.remove_terrain_object(terrain_name, obj_name)
+				removed_count += 1
+				break
+
+	if removed_count > 0:
+		_chat_handler.sys("Removed " + obj_name + " from " + str(removed_count) + " terrains", Color.GRAY)
+
+	_refresh_assets_tab()
 
 
 # ==================== WORLD RUNNER ====================

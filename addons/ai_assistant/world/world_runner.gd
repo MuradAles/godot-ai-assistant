@@ -73,8 +73,12 @@ func generate_world() -> void:
 	# Generate terrain data
 	var terrain_data := _terrain.generate_terrain(world_width, world_height, _assets.manifest_terrains)
 
-	# Generate structures
-	var structures_data := _terrain.generate_structures(terrain_data, _assets.manifest_terrains)
+	# Generate structures using manifest spawn rates
+	var manifest_data := _assets.load_manifest_data()
+	var manifest_terrain: Dictionary = manifest_data.get("terrain", {})
+	var manifest_objects: Dictionary = manifest_data.get("objects", {})
+	_terrain.set_object_sizes(manifest_objects)
+	var structures_data := _terrain.generate_structures(terrain_data, _assets.manifest_terrains, manifest_terrain)
 
 	# Build the visual tilemap
 	_build_tilemap(terrain_data, structures_data)

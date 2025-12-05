@@ -47,9 +47,19 @@ func generate_terrain(width: int, height: int, terrain_names: Array[String]) -> 
 	return terrain
 
 
-## Generate structure placements based on terrain
+## Object sizes from manifest (set by world_runner before generation)
+var _object_sizes: Dictionary = {}
+
+
+## Set object sizes from manifest
+func set_object_sizes(sizes: Dictionary) -> void:
+	_object_sizes = sizes
+
+
+## Generate structure placements based on terrain and manifest spawn rates
+## manifest_terrain: Dictionary of terrain data from manifest with "spawns" arrays
 ## Returns {grid: 2D array, objects: Array of object data}
-func generate_structures(terrain_data: Array, terrain_names: Array[String]) -> Dictionary:
+func generate_structures(terrain_data: Array, terrain_names: Array[String], manifest_terrain: Dictionary = {}) -> Dictionary:
 	var width: int = terrain_data[0].size() if terrain_data.size() > 0 else 0
 	var height: int = terrain_data.size()
 
@@ -63,37 +73,32 @@ func generate_structures(terrain_data: Array, terrain_names: Array[String]) -> D
 			row.append(0)
 		structures_grid.append(row)
 
-	# Place objects on appropriate terrain (not water)
+	# Build spawn config per terrain from manifest
+	var spawn_config: Dictionary = _build_spawn_config(terrain_names, manifest_terrain)
+
+	# Place objects based on terrain spawn configuration
 	for y in range(height):
 		for x in range(width):
 			var terrain_idx: int = terrain_data[y][x]
 			var terrain_name: String = terrain_names[terrain_idx] if terrain_idx < terrain_names.size() else ""
 
-			# Don't place on water
-			if terrain_name == "water":
+			# Skip if no spawns configured for this terrain
+			if not spawn_config.has(terrain_name):
 				continue
 
-			var roll := randf()
+			var roll := randf() * 100.0  # 0-100 for percentage comparison
 
-			# Choose object type based on terrain
-			if terrain_name == "sand":
-				if roll < 0.015:
-					structure_objects.append(_make_structure(8, x, y, 1, 2))  # PALM_TREE
-				elif roll < 0.02:
-					structure_objects.append(_make_structure(6, x, y, 1, 1))  # ROCK
-			elif terrain_name == "forest":
-				if roll < 0.04:
-					structure_objects.append(_make_structure(5, x, y, 1, 2))  # TREE
-				elif roll < 0.06:
-					structure_objects.append(_make_structure(7, x, y, 1, 1))  # BUSH
-			else:
-				# Other terrain (grass, dirt, etc.)
-				if roll < 0.02:
-					structure_objects.append(_make_structure(5, x, y, 1, 2))  # TREE
-				elif roll < 0.025:
-					structure_objects.append(_make_structure(6, x, y, 1, 1))  # ROCK
-				elif roll < 0.03:
-					structure_objects.append(_make_structure(7, x, y, 1, 1))  # BUSH
+			# Check each spawn in order by percent (cumulative)
+			var cumulative := 0.0
+			var spawns: Array = spawn_config[terrain_name]
+			for spawn in spawns:
+				cumulative += spawn.percent
+				if roll < cumulative:
+					var obj_name: String = spawn.object
+					var obj_size: Vector2i = _get_object_size(obj_name)
+					# Pass object name directly so tilemap can load any texture
+					structure_objects.append(_make_structure_named(obj_name, x, y, obj_size.x, obj_size.y))
+					break
 
 	return {
 		"grid": structures_grid,
@@ -101,8 +106,76 @@ func generate_structures(terrain_data: Array, terrain_names: Array[String]) -> D
 	}
 
 
+## Build spawn configuration dictionary from manifest terrain data
+func _build_spawn_config(terrain_names: Array[String], manifest_terrain: Dictionary) -> Dictionary:
+	var config: Dictionary = {}
+
+	for terrain_name in terrain_names:
+		if manifest_terrain.has(terrain_name):
+			var terrain_data: Dictionary = manifest_terrain[terrain_name]
+			var spawns: Array = terrain_data.get("spawns", [])
+			if not spawns.is_empty():
+				config[terrain_name] = spawns
+
+	# Fallback to hardcoded defaults if no spawn config in manifest
+	if config.is_empty():
+		config = _get_default_spawn_config()
+
+	return config
+
+
+## Get fallback spawn config when manifest has no spawns defined
+func _get_default_spawn_config() -> Dictionary:
+	return {
+		"sand": [
+			{"object": "palm_tree", "percent": 1.5},
+			{"object": "rock", "percent": 0.5}
+		],
+		"forest": [
+			{"object": "tree", "percent": 4.0},
+			{"object": "bush", "percent": 2.0}
+		],
+		"grass": [
+			{"object": "tree", "percent": 2.0},
+			{"object": "rock", "percent": 0.5},
+			{"object": "bush", "percent": 0.5}
+		]
+	}
+
+
+## Map object name to type ID for structure placement
+func _get_object_type(obj_name: String) -> int:
+	match obj_name.to_lower():
+		"tree": return 5
+		"rock": return 6
+		"bush": return 7
+		"palm_tree": return 8
+		_: return 5  # Default to tree
+
+
+## Get object size (width, height) for structure placement
+## Uses manifest sizes if available, otherwise falls back to defaults
+func _get_object_size(obj_name: String) -> Vector2i:
+	# Check manifest sizes first
+	if _object_sizes.has(obj_name):
+		var obj_data: Dictionary = _object_sizes[obj_name]
+		var w: int = obj_data.get("width", 1)
+		var h: int = obj_data.get("height", 1)
+		return Vector2i(w, h)
+
+	# Fallback defaults for common objects
+	match obj_name.to_lower():
+		"tree", "palm_tree": return Vector2i(1, 2)
+		"rock", "bush": return Vector2i(1, 1)
+		_: return Vector2i(1, 1)
+
+
 func _make_structure(type: int, x: int, y: int, w: int, h: int) -> Dictionary:
 	return {"type": type, "x": x, "y": y, "width": w, "height": h}
+
+
+func _make_structure_named(obj_name: String, x: int, y: int, w: int, h: int) -> Dictionary:
+	return {"name": obj_name, "x": x, "y": y, "width": w, "height": h}
 
 
 ## Find a spawn position on non-water terrain near center

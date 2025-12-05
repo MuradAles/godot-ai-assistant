@@ -17,6 +17,7 @@ func setup(assets: WorldAssets, transitions: WorldTransitions, tile_size: int) -
 
 
 ## Create main terrain tileset from manifest
+## Now includes multiple variation tiles per terrain
 func create_terrain_tileset() -> TileSet:
 	var ts := TileSet.new()
 	ts.tile_size = Vector2i(_tile_size, _tile_size)
@@ -26,55 +27,90 @@ func create_terrain_tileset() -> TileSet:
 	t_src.texture_region_size = Vector2i(_tile_size, _tile_size)
 	ts.add_source(t_src, 0)
 
-	# Create tiles for each terrain type
-	for i in range(_assets.manifest_terrains.size()):
-		t_src.create_tile(Vector2i(i, 0))
+	# Create tiles for each terrain type AND each variation
+	var num_terrains := _assets.manifest_terrains.size()
+	var total_cols := num_terrains * VARIATIONS_PER_TERRAIN
+	for col in range(total_cols):
+		t_src.create_tile(Vector2i(col, 0))
 
 	return ts
 
 
+## Number of variation slots per terrain in the atlas
+const VARIATIONS_PER_TERRAIN := 4
+
 ## Create terrain atlas texture from loaded assets
+## Atlas layout: [terrain0_v0, terrain0_v1, terrain0_v2, terrain0_v3, terrain1_v0, ...]
 func _make_terrain_atlas() -> ImageTexture:
 	var num_terrains := _assets.manifest_terrains.size()
 	if num_terrains == 0:
 		num_terrains = 1
 
-	var img := Image.create(_tile_size * num_terrains, _tile_size, false, Image.FORMAT_RGBA8)
+	# Create atlas with space for variations (4 columns per terrain)
+	var total_cols := num_terrains * VARIATIONS_PER_TERRAIN
+	var img := Image.create(_tile_size * total_cols, _tile_size, false, Image.FORMAT_RGBA8)
 
 	for i in range(_assets.manifest_terrains.size()):
 		var terrain_name: String = _assets.manifest_terrains[i]
+		var base_col := i * VARIATIONS_PER_TERRAIN
 
-		# Get texture (may be random variation)
-		var tex: Texture2D = _assets.get_terrain_texture(terrain_name)
+		# Get base texture and all variations
+		var all_textures: Array[Texture2D] = _get_all_terrain_textures(terrain_name)
 
-		if tex:
-			var loaded_img: Image = tex.get_image()
+		# Fill all variation slots
+		for v in range(VARIATIONS_PER_TERRAIN):
+			var col := base_col + v
+			var tex: Texture2D = null
 
-			# Resize if needed
-			if loaded_img.get_width() != _tile_size or loaded_img.get_height() != _tile_size:
-				loaded_img.resize(_tile_size, _tile_size, Image.INTERPOLATE_NEAREST)
+			if v < all_textures.size():
+				tex = all_textures[v]
+			elif all_textures.size() > 0:
+				# Reuse textures if we have fewer than VARIATIONS_PER_TERRAIN
+				tex = all_textures[v % all_textures.size()]
 
-			# Copy into atlas
-			for py in range(_tile_size):
-				for px in range(_tile_size):
-					var pixel_color := loaded_img.get_pixel(px, py)
-					img.set_pixel(i * _tile_size + px, py, pixel_color)
+			if tex:
+				var loaded_img: Image = tex.get_image()
+				if loaded_img.get_width() != _tile_size or loaded_img.get_height() != _tile_size:
+					loaded_img.resize(_tile_size, _tile_size, Image.INTERPOLATE_NEAREST)
 
-			print("[WorldTilemap] Using generated texture for terrain: ", terrain_name)
-		else:
-			# Fallback: colored placeholder
-			var color := _assets.get_terrain_color(terrain_name)
-			for py in range(_tile_size):
-				for px in range(_tile_size):
-					var c := color
-					c.r = clampf(c.r + randf_range(-0.03, 0.03), 0, 1)
-					c.g = clampf(c.g + randf_range(-0.03, 0.03), 0, 1)
-					c.b = clampf(c.b + randf_range(-0.03, 0.03), 0, 1)
-					img.set_pixel(i * _tile_size + px, py, c)
+				# Copy into atlas at this column
+				for py in range(_tile_size):
+					for px in range(_tile_size):
+						var pixel_color := loaded_img.get_pixel(px, py)
+						img.set_pixel(col * _tile_size + px, py, pixel_color)
+			else:
+				# Fallback: colored placeholder with slight variation
+				var color := _assets.get_terrain_color(terrain_name)
+				var variation_offset := v * 0.02  # Slight color shift per variation
+				for py in range(_tile_size):
+					for px in range(_tile_size):
+						var c := color
+						c.r = clampf(c.r + randf_range(-0.03, 0.03) + variation_offset, 0, 1)
+						c.g = clampf(c.g + randf_range(-0.03, 0.03), 0, 1)
+						c.b = clampf(c.b + randf_range(-0.03, 0.03) - variation_offset, 0, 1)
+						img.set_pixel(col * _tile_size + px, py, c)
 
-			print("[WorldTilemap] Using placeholder for terrain: ", terrain_name)
+		print("[WorldTilemap] Loaded %d textures for terrain: %s" % [all_textures.size(), terrain_name])
 
 	return ImageTexture.create_from_image(img)
+
+
+## Get all available textures for a terrain (base + variations)
+func _get_all_terrain_textures(terrain_name: String) -> Array[Texture2D]:
+	var textures: Array[Texture2D] = []
+
+	# Get base texture
+	if _assets.terrain_textures.has(terrain_name):
+		textures.append(_assets.terrain_textures[terrain_name])
+
+	# Get variations
+	if _assets.terrain_variations.has(terrain_name):
+		var variations: Array = _assets.terrain_variations[terrain_name]
+		for tex in variations:
+			if tex is Texture2D:
+				textures.append(tex)
+
+	return textures
 
 
 ## Create tileset for transition tiles (wang tiles)
@@ -131,7 +167,7 @@ func create_transition_tileset() -> TileSet:
 	return ts
 
 
-## Place terrain tiles on layer
+## Place terrain tiles on layer with random variations
 func place_terrain_tiles(layer: TileMapLayer, terrain_data: Array) -> void:
 	var height: int = terrain_data.size()
 	var width: int = terrain_data[0].size() if height > 0 else 0
@@ -139,7 +175,11 @@ func place_terrain_tiles(layer: TileMapLayer, terrain_data: Array) -> void:
 	for y in range(height):
 		for x in range(width):
 			var terrain_idx: int = terrain_data[y][x]
-			layer.set_cell(Vector2i(x, y), 0, Vector2i(terrain_idx, 0))
+			# Calculate base column for this terrain (each terrain has VARIATIONS_PER_TERRAIN columns)
+			var base_col := terrain_idx * VARIATIONS_PER_TERRAIN
+			# Pick a random variation
+			var variation := randi() % VARIATIONS_PER_TERRAIN
+			layer.set_cell(Vector2i(x, y), 0, Vector2i(base_col + variation, 0))
 
 
 ## Place transition tiles on layer
@@ -175,16 +215,23 @@ func place_transition_tiles(layer: TileMapLayer, terrain_data: Array, transition
 ## Place structure sprites on container
 func place_structure_sprites(container: Node2D, structure_objects: Array) -> void:
 	for obj in structure_objects:
-		var obj_type: int = obj["type"]
 		var x: int = obj["x"]
 		var y: int = obj["y"]
 		var w: int = obj["width"]
 		var h: int = obj["height"]
 
-		var sprite := Sprite2D.new()
-		sprite.name = "Structure_%d_%d" % [x, y]
+		# Support both new format (name) and old format (type)
+		var obj_name: String = obj.get("name", "")
+		if obj_name.is_empty():
+			# Legacy support: convert type ID to name
+			var obj_type: int = obj.get("type", 5)
+			var type_names := {5: "tree", 6: "rock", 7: "bush", 8: "palm_tree"}
+			obj_name = type_names.get(obj_type, "tree")
 
-		var tex: Texture2D = _get_structure_texture(obj_type, w, h)
+		var sprite := Sprite2D.new()
+		sprite.name = "Structure_%d_%d_%s" % [x, y, obj_name]
+
+		var tex: Texture2D = _get_structure_texture_by_name(obj_name, w, h)
 		sprite.texture = tex
 
 		sprite.position = Vector2(
@@ -195,6 +242,17 @@ func place_structure_sprites(container: Node2D, structure_objects: Array) -> voi
 		sprite.z_index = y
 
 		container.add_child(sprite)
+
+
+## Get texture for any object by name
+func _get_structure_texture_by_name(obj_name: String, w: int, h: int) -> Texture2D:
+	# Try to get from assets (works for any generated object)
+	var tex := _assets.get_object_texture(obj_name)
+	if tex:
+		return tex
+
+	# Fallback placeholder
+	return _make_placeholder_structure_named(obj_name, w, h)
 
 
 func _get_structure_texture(structure_type: int, w: int, h: int) -> Texture2D:
@@ -241,5 +299,32 @@ func _make_placeholder_structure(structure_type: int, w: int, h: int) -> ImageTe
 						img.set_pixel(px, py, rock_color)
 		_:
 			img.fill_rect(Rect2i(0, 0, pw, ph), Color(0.5, 0.5, 0.5))
+
+	return ImageTexture.create_from_image(img)
+
+
+## Create placeholder for any named object
+func _make_placeholder_structure_named(obj_name: String, w: int, h: int) -> ImageTexture:
+	var pw: int = w * _tile_size
+	var ph: int = h * _tile_size
+	var img := Image.create(pw, ph, false, Image.FORMAT_RGBA8)
+
+	# Generate a unique color based on object name
+	var hash_val := obj_name.hash()
+	var hue := fmod(abs(hash_val) / 1000000.0, 1.0)
+	var color := Color.from_hsv(hue, 0.6, 0.7)
+
+	# Draw a simple circular/oval shape
+	var cx: int = pw / 2
+	var cy: int = ph / 2
+	var rx: int = pw / 2 - 2
+	var ry: int = ph / 2 - 2
+
+	for py in range(ph):
+		for px in range(pw):
+			var dx: float = float(px - cx) / rx
+			var dy: float = float(py - cy) / ry
+			if dx * dx + dy * dy < 1.0:
+				img.set_pixel(px, py, color)
 
 	return ImageTexture.create_from_image(img)

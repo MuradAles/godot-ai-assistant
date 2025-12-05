@@ -174,8 +174,9 @@ func _image_to_data_uri(image_path: String) -> String:
 
 
 ## Generate an object (tree, rock, etc)
-## Uses 'tile_object' style - max 96x96 pixels
-func generate_object(object_name: String, prompt: String, tile_size: int = 32, index: int = 1) -> void:
+## width_tiles/height_tiles: size in tiles (e.g., 1x2 = 1 tile wide, 2 tiles tall)
+## Uses 'tile_object' style for small objects (max 96x96), 'scene_object' for larger (max 384x384)
+func generate_object(object_name: String, prompt: String, tile_size: int = 32, index: int = 1, width_tiles: int = 1, height_tiles: int = 1) -> void:
 	var full_prompt := prompt + ", pixel art sprite, transparent background, top-down rpg asset"
 	var filename := object_name + "_" + str(index).pad_zeros(2) + ".png"
 
@@ -186,15 +187,29 @@ func generate_object(object_name: String, prompt: String, tile_size: int = 32, i
 		"file": "objects/" + object_name + "/" + filename
 	}
 
-	# tile_object max is 96x96, clamp to safe values
-	var obj_width := mini(tile_size * 2, 96)
-	var obj_height := mini(tile_size * 2, 96)
+	# Calculate pixel dimensions from tile size
+	var px_width := tile_size * width_tiles
+	var px_height := tile_size * height_tiles
+
+	# Choose style based on size:
+	# - tile_object: max 96x96 pixels
+	# - scene_object: max 384x384 pixels
+	var style := "tile_object"
+	if px_width > 96 or px_height > 96:
+		style = "scene_object"
+		px_width = mini(px_width, 384)
+		px_height = mini(px_height, 384)
+	else:
+		px_width = mini(px_width, 96)
+		px_height = mini(px_height, 96)
+
+	print("[Replicate] Generating object: %s at %dx%d px (%dx%d tiles) using %s" % [object_name, px_width, px_height, width_tiles, height_tiles, style])
 
 	_start_prediction({
 		"prompt": full_prompt,
-		"style": "tile_object",
-		"width": obj_width,
-		"height": obj_height
+		"style": style,
+		"width": px_width,
+		"height": px_height
 	})
 
 

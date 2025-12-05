@@ -184,7 +184,9 @@ func _start_generation(name: String, data: Dictionary, asset_type: String) -> vo
 			client.generate_transition(from_t, to_t, prompt, tile_size, from_image, to_image)
 		"object":
 			var idx: int = data.get("generated", 0) + 1
-			client.generate_object(name, prompt, tile_size, idx)
+			var obj_width: int = data.get("width", 1)
+			var obj_height: int = data.get("height", 1)
+			client.generate_object(name, prompt, tile_size, idx, obj_width, obj_height)
 		"structure":
 			var idx: int = data.get("generated", 0) + 1
 			client.generate_structure(name, prompt, tile_size, idx)

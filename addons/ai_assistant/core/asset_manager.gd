@@ -88,7 +88,8 @@ func add_transition(from_terrain: String, to_terrain: String, prompt: String) ->
 
 
 ## Add an object type (trees, rocks, etc)
-func add_object(name: String, prompt: String, count: int = 1) -> void:
+## width/height are in tiles (e.g., 1x2 = 1 tile wide, 2 tiles tall)
+func add_object(name: String, prompt: String, count: int = 1, width: int = 1, height: int = 1) -> void:
 	if _manifest.objects.has(name):
 		_manifest.objects[name].needed += count
 	else:
@@ -96,10 +97,31 @@ func add_object(name: String, prompt: String, count: int = 1) -> void:
 			"generated": 0,
 			"needed": count,
 			"folder": "objects/" + name,
-			"prompt": prompt
+			"prompt": prompt,
+			"width": width,
+			"height": height
 		}
 	save_manifest()
 	manifest_changed.emit()
+
+
+## Get object size from manifest (width, height in tiles)
+func get_object_size(name: String) -> Vector2i:
+	if _manifest.objects.has(name):
+		var obj: Dictionary = _manifest.objects[name]
+		var w: int = obj.get("width", 1)
+		var h: int = obj.get("height", 1)
+		return Vector2i(w, h)
+	return Vector2i(1, 1)
+
+
+## Set object size in manifest
+func set_object_size(name: String, width: int, height: int) -> void:
+	if _manifest.objects.has(name):
+		_manifest.objects[name].width = width
+		_manifest.objects[name].height = height
+		save_manifest()
+		manifest_changed.emit()
 
 
 ## Add a structure type (houses, towers, etc)
@@ -140,6 +162,68 @@ func add_terrain_variation(name: String, variation_index: int) -> void:
 func get_terrain_variations(name: String) -> Array:
 	if _manifest.terrain.has(name):
 		return _manifest.terrain[name].get("variations", [])
+	return []
+
+
+## Add an object spawn to a terrain (what spawns on this terrain)
+func add_terrain_object(terrain_name: String, object_name: String, percent: float) -> void:
+	if not _manifest.terrain.has(terrain_name):
+		return
+	if not _manifest.terrain[terrain_name].has("spawns"):
+		_manifest.terrain[terrain_name].spawns = []
+
+	# Check if object already exists
+	for spawn in _manifest.terrain[terrain_name].spawns:
+		if spawn.get("object") == object_name:
+			spawn.percent = percent
+			save_manifest()
+			manifest_changed.emit()
+			return
+
+	# Add new spawn
+	_manifest.terrain[terrain_name].spawns.append({
+		"object": object_name,
+		"percent": percent
+	})
+	save_manifest()
+	manifest_changed.emit()
+
+
+## Remove an object spawn from a terrain
+func remove_terrain_object(terrain_name: String, object_name: String) -> void:
+	if not _manifest.terrain.has(terrain_name):
+		return
+	if not _manifest.terrain[terrain_name].has("spawns"):
+		return
+
+	var spawns: Array = _manifest.terrain[terrain_name].spawns
+	for i in range(spawns.size() - 1, -1, -1):
+		if spawns[i].get("object") == object_name:
+			spawns.remove_at(i)
+
+	save_manifest()
+	manifest_changed.emit()
+
+
+## Update spawn percent for an object on a terrain
+func set_terrain_object_percent(terrain_name: String, object_name: String, percent: float) -> void:
+	if not _manifest.terrain.has(terrain_name):
+		return
+	if not _manifest.terrain[terrain_name].has("spawns"):
+		return
+
+	for spawn in _manifest.terrain[terrain_name].spawns:
+		if spawn.get("object") == object_name:
+			spawn.percent = percent
+			save_manifest()
+			manifest_changed.emit()
+			return
+
+
+## Get all object spawns for a terrain
+func get_terrain_objects(terrain_name: String) -> Array:
+	if _manifest.terrain.has(terrain_name):
+		return _manifest.terrain[terrain_name].get("spawns", [])
 	return []
 
 
