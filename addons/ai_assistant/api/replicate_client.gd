@@ -263,7 +263,7 @@ func _start_prediction(input: Dictionary) -> void:
 	# Instead, we'll poll for completion
 	# tileset and tileset_advanced take longer, so poll instead of wait
 	var style: String = input.get("style", "single_tile")
-	var use_wait := style in ["single_tile", "tile_object", "scene_object"]
+	var use_wait := style in ["single_tile", "tile_variation", "tile_object", "scene_object"]
 	# tileset_advanced can take 30-60s, must poll
 
 	var headers := PackedStringArray([

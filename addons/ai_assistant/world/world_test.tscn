@@ -3,7 +3,7 @@
 [ext_resource type="Script" uid="uid://ba5o4wondjrlr" path="res://addons/ai_assistant/world/world_runner.gd" id="1"]
 
 [node name="WorldTest" type="Node2D"]
-position = Vector2(0, 1)
+position = Vector2(0, -1)
 script = ExtResource("1")
 world_seed = 1937335986
 
@@ -14,7 +14,7 @@ offset_left = 10.0
 offset_top = 10.0
 offset_right = 400.0
 offset_bottom = 80.0
-text = "WASD - Move | R - New World | ESC - Quit"
+text = "WASD - Move | R - New World | F/F11 - Fullscreen | ESC - Quit"
 
 [node name="SeedLabel" type="Label" parent="UI"]
 offset_left = 10.0

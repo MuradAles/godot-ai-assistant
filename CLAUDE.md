@@ -142,3 +142,23 @@ res://
 - Object size control (width × height in tiles)
 - "All Terrain" global objects that spawn everywhere
 - Live world preview with player movement (WASD/arrows)
+- Fullscreen toggle (F/F11) - requires running in separate window, not embedded
+- Pixel-perfect rendering with nearest-neighbor texture filtering
+
+## Running the World Preview
+
+The world preview (`world_test.tscn`) supports these controls:
+- **WASD/Arrows**: Move player
+- **R**: Generate new world (random seed)
+- **F/F11**: Toggle fullscreen (only works in separate window)
+- **ESC**: Quit
+
+**Note**: Fullscreen only works when running in a **separate window**, not Godot's embedded game view. To run in a separate window:
+- Use **Editor → Run Project** with embedded mode disabled
+- Or run from command line: `godot --path . res://addons/ai_assistant/world/world_test.tscn`
+
+## Rendering Settings
+
+Pixel art assets require nearest-neighbor filtering for crisp display:
+- `project.godot`: `textures/canvas_textures/default_texture_filter=0`
+- All TileMapLayers and Sprites use `TEXTURE_FILTER_NEAREST`

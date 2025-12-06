@@ -51,6 +51,8 @@ func _input(event: InputEvent) -> void:
 			generate_world()
 		elif event.keycode == KEY_ESCAPE:
 			get_tree().quit()
+		elif event.keycode == KEY_F11 or event.keycode == KEY_F:
+			_toggle_fullscreen()
 
 
 func generate_world() -> void:
@@ -96,30 +98,34 @@ func generate_world() -> void:
 
 
 func _build_tilemap(terrain_data: Array, structures_data: Dictionary) -> void:
-	# Create terrain layer
+	# Create terrain layer with pixel-perfect rendering
 	terrain_layer = TileMapLayer.new()
 	terrain_layer.name = "Terrain"
 	terrain_layer.tile_set = _tilemap.create_terrain_tileset()
+	terrain_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(terrain_layer)
 
-	# Create transition layer
+	# Create transition layer with pixel-perfect rendering
 	transition_layer = TileMapLayer.new()
 	transition_layer.name = "Transitions"
 	transition_layer.tile_set = _tilemap.create_transition_tileset()
 	transition_layer.z_index = 1
+	transition_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(transition_layer)
 
-	# Create structure layer
+	# Create structure layer with pixel-perfect rendering
 	structure_layer = TileMapLayer.new()
 	structure_layer.name = "Structures"
 	structure_layer.tile_set = terrain_layer.tile_set
 	structure_layer.z_index = 2
+	structure_layer.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(structure_layer)
 
-	# Create object sprites container
+	# Create object sprites container with pixel-perfect rendering
 	object_sprites = Node2D.new()
 	object_sprites.name = "ObjectSprites"
 	object_sprites.z_index = 3
+	object_sprites.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	add_child(object_sprites)
 
 	# Place terrain tiles
@@ -156,6 +162,7 @@ func _spawn_player(terrain_data: Array) -> void:
 
 	var sprite := Sprite2D.new()
 	sprite.name = "Sprite2D"
+	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 
 	var player_tex := _assets.get_object_texture("player")
 	if player_tex:
@@ -263,3 +270,30 @@ func _clear() -> void:
 
 	if _assets:
 		_assets.clear()
+
+
+func _toggle_fullscreen() -> void:
+	var current_mode := DisplayServer.window_get_mode()
+	print("[World] Toggle fullscreen - current mode: ", current_mode)
+
+	# Check if already fullscreen (regular or exclusive)
+	if current_mode == DisplayServer.WINDOW_MODE_FULLSCREEN or current_mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+		print("[World] Exiting fullscreen...")
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	else:
+		# Try fullscreen from any non-fullscreen mode
+		print("[World] Entering fullscreen...")
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+		# Check if it worked
+		await get_tree().process_frame
+		var new_mode := DisplayServer.window_get_mode()
+		print("[World] New mode after fullscreen attempt: ", new_mode)
+
+		if new_mode != DisplayServer.WINDOW_MODE_FULLSCREEN:
+			# Try exclusive fullscreen as fallback
+			print("[World] Regular fullscreen failed, trying exclusive...")
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+			await get_tree().process_frame
+			new_mode = DisplayServer.window_get_mode()
+			print("[World] Mode after exclusive attempt: ", new_mode)

@@ -85,10 +85,11 @@ func load_assets() -> void:
 	var terrain_dict: Dictionary = manifest.get("terrain", {})
 
 	# Load terrain textures - each terrain has its own PNG
+	# Use CACHE_MODE_IGNORE to force reload newly generated assets
 	for terrain_name in manifest_terrains:
 		var terrain_path := ASSET_BASE + "terrain/" + terrain_name + ".png"
 		if ResourceLoader.exists(terrain_path):
-			terrain_textures[terrain_name] = load(terrain_path)
+			terrain_textures[terrain_name] = ResourceLoader.load(terrain_path, "", ResourceLoader.CACHE_MODE_IGNORE)
 			print("[WorldAssets] Loaded terrain: ", terrain_path)
 		else:
 			print("[WorldAssets] Terrain not found: ", terrain_path)
@@ -100,15 +101,21 @@ func load_assets() -> void:
 			if variations.size() > 0:
 				var var_textures: Array[Texture2D] = []
 				for var_idx in variations:
-					var var_path := ASSET_BASE + "terrain/" + terrain_name + "_v" + str(var_idx) + ".png"
+					# Convert float to int for path (JSON stores numbers as floats)
+					var idx_int: int = int(var_idx)
+					var var_path := ASSET_BASE + "terrain/" + terrain_name + "_v" + str(idx_int) + ".png"
+					print("[WorldAssets] Looking for variation: ", var_path)
 					if ResourceLoader.exists(var_path):
-						var_textures.append(load(var_path))
+						var_textures.append(ResourceLoader.load(var_path, "", ResourceLoader.CACHE_MODE_IGNORE))
 						print("[WorldAssets] Loaded terrain variation: ", var_path)
+					else:
+						print("[WorldAssets] Variation file NOT FOUND: ", var_path)
 				if var_textures.size() > 0:
 					terrain_variations[terrain_name] = var_textures
-					print("[WorldAssets] Loaded ", var_textures.size(), " variations for: ", terrain_name)
+					print("[WorldAssets] Total variations loaded for %s: %d (base + %d)" % [terrain_name, var_textures.size() + 1, var_textures.size()])
 
 	# Load object textures from manifest
+	# Use CACHE_MODE_IGNORE to force reload newly generated assets
 	var objects_dict: Dictionary = manifest.get("objects", {})
 	for obj_name in objects_dict.keys():
 		var obj_data: Dictionary = objects_dict[obj_name]
@@ -121,7 +128,7 @@ func load_assets() -> void:
 				var idx_str: String = str(i).pad_zeros(2)
 				var obj_path: String = ASSET_BASE + folder + "/" + obj_name + "_" + idx_str + ".png"
 				if ResourceLoader.exists(obj_path):
-					variants.append(load(obj_path))
+					variants.append(ResourceLoader.load(obj_path, "", ResourceLoader.CACHE_MODE_IGNORE))
 					print("[WorldAssets] Loaded object variant: ", obj_path)
 
 			if variants.size() > 0:
@@ -138,7 +145,7 @@ func load_assets() -> void:
 			var idx_str: String = str(i).pad_zeros(2)
 			var obj_path: String = ASSET_BASE + "objects/" + obj_name + "/" + obj_name + "_" + idx_str + ".png"
 			if ResourceLoader.exists(obj_path):
-				variants.append(load(obj_path))
+				variants.append(ResourceLoader.load(obj_path, "", ResourceLoader.CACHE_MODE_IGNORE))
 			else:
 				break
 		if variants.size() > 0:

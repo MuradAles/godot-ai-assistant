@@ -90,7 +90,7 @@ func _make_terrain_atlas() -> ImageTexture:
 						c.b = clampf(c.b + randf_range(-0.03, 0.03) - variation_offset, 0, 1)
 						img.set_pixel(col * _tile_size + px, py, c)
 
-		print("[WorldTilemap] Loaded %d textures for terrain: %s" % [all_textures.size(), terrain_name])
+		print("[WorldTilemap] Atlas: %s has %d unique textures (filling %d slots)" % [terrain_name, all_textures.size(), VARIATIONS_PER_TERRAIN])
 
 	return ImageTexture.create_from_image(img)
 
@@ -230,6 +230,7 @@ func place_structure_sprites(container: Node2D, structure_objects: Array) -> voi
 
 		var sprite := Sprite2D.new()
 		sprite.name = "Structure_%d_%d_%s" % [x, y, obj_name]
+		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 
 		var tex: Texture2D = _get_structure_texture_by_name(obj_name, w, h)
 		sprite.texture = tex

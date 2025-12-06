@@ -13,7 +13,6 @@ var _chat_container: VBoxContainer
 var _clear_button: Button
 var _settings_button: Button
 var _asset_container: VBoxContainer
-var _generate_all_btn: Button
 var _run_world_btn: Button
 var _asset_status: Label
 
@@ -83,7 +82,6 @@ func _find_ui_nodes() -> void:
 	_clear_button = _find("ClearButton") as Button
 	_settings_button = _find("SettingsButton") as Button
 	_asset_container = _find("AssetContainer") as VBoxContainer
-	_generate_all_btn = _find("GenerateAllBtn") as Button
 	_run_world_btn = _find("RunWorldBtn") as Button
 	_asset_status = _find("AssetStatus") as Label
 
@@ -128,8 +126,6 @@ func _connect_signals() -> void:
 		_clear_button.pressed.connect(_on_clear_pressed)
 	if _settings_button:
 		_settings_button.pressed.connect(_on_settings_pressed)
-	if _generate_all_btn:
-		_generate_all_btn.pressed.connect(_on_generate_all_pressed)
 	if _run_world_btn:
 		_run_world_btn.pressed.connect(_on_run_world_pressed)
 
@@ -167,17 +163,6 @@ func _on_clear_pressed() -> void:
 
 func _on_settings_pressed() -> void:
 	_settings_manager.open_dialog()
-
-
-func _on_generate_all_pressed() -> void:
-	if not _asset_generator:
-		_chat_handler.sys("Asset generator not loaded!", Color.RED)
-		return
-	var started: int = _asset_generator.generate_all()
-	if started > 0:
-		_chat_handler.sys("Started " + str(started) + " parallel generations", Color.CYAN)
-	else:
-		_chat_handler.sys("All assets already generated!", Color.GREEN)
 
 
 func _on_run_world_pressed() -> void:
@@ -290,9 +275,6 @@ func _refresh_assets_tab() -> void:
 			_asset_status.text = str(pending) + " assets to generate"
 		else:
 			_asset_status.text = "All assets generated!"
-
-	if _generate_all_btn:
-		_generate_all_btn.visible = pending > 0
 
 
 func _add_asset_section(title: String, assets: Dictionary, asset_type: String) -> void:

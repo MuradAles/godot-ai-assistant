@@ -92,11 +92,6 @@ horizontal_scroll_mode = 0
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="GenerateAllBtn" type="Button" parent="MainVBox/TabContainer/Assets"]
-visible = false
-layout_mode = 2
-text = "Generate All"
-
 [node name="RunWorldBtn" type="Button" parent="MainVBox/TabContainer/Assets"]
 layout_mode = 2
 text = "Run World"
